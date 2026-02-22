@@ -74,13 +74,16 @@ fn buildPrompt(allocator: std.mem.Allocator, messages: []const msg.Message) ![]c
     return buf.toOwnedSlice(allocator);
 }
 
-fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []const u8) !Cmd {
+fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, _session_uuid: []const u8) !Cmd {
+    _ = _session_uuid; // TODO: re-enable with --session-id
     var cmd = Cmd.init(allocator, "claude");
     errdefer cmd.deinit();
     try cmd.arg("-p");
     try cmd.arg(prompt);
     try cmd.option("--output-format", "json");
-    try cmd.option("--session-id", session_uuid);
+    // TODO: re-enable session-id once session reuse is implemented
+    // try cmd.option("--session-id", session_uuid);
+    try cmd.arg("--resume");
     try cmd.envRemove("CLAUDECODE");
     return cmd;
 }
@@ -218,14 +221,13 @@ test "buildCmd produces correct argv" {
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
-    try testing.expectEqual(7, argv.len);
+    try testing.expectEqual(6, argv.len);
     try testing.expectEqualStrings("claude", argv[0]);
     try testing.expectEqualStrings("-p", argv[1]);
     try testing.expectEqualStrings("hello world", argv[2]);
     try testing.expectEqualStrings("--output-format", argv[3]);
     try testing.expectEqualStrings("json", argv[4]);
-    try testing.expectEqualStrings("--session-id", argv[5]);
-    try testing.expectEqualStrings("abc-123", argv[6]);
+    try testing.expectEqualStrings("--resume", argv[5]);
 }
 
 test "parseClaudeResponse valid result" {
