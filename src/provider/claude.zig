@@ -20,6 +20,8 @@ const SessionInfo = struct {
 allocator: std.mem.Allocator,
 pool: *ProcessPool,
 sessions: std.AutoHashMap(Handle, SessionInfo),
+/// Maps conversation_id → session_uuid for reuse across messages.
+conversation_uuids: std.StringHashMap([]const u8),
 next_handle: u64,
 
 pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool) Claude {
@@ -27,6 +29,7 @@ pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool) Claude {
         .allocator = allocator,
         .pool = pool,
         .sessions = std.AutoHashMap(Handle, SessionInfo).init(allocator),
+        .conversation_uuids = std.StringHashMap([]const u8).init(allocator),
         .next_handle = 0,
     };
 }
@@ -37,10 +40,17 @@ pub fn deinit(self: *Claude) void {
     while (it.next()) |session| {
         self.pool.kill(session.process_id);
         self.pool.remove(session.process_id);
-        self.allocator.free(session.session_uuid);
         self.allocator.free(session.conversation_id);
     }
     self.sessions.deinit();
+
+    // Free conversation UUID mappings
+    var cit = self.conversation_uuids.iterator();
+    while (cit.next()) |entry| {
+        self.allocator.free(entry.key_ptr.*);
+        self.allocator.free(entry.value_ptr.*);
+    }
+    self.conversation_uuids.deinit();
 }
 
 pub fn provider(self: *Claude) Provider {
@@ -74,16 +84,14 @@ fn buildPrompt(allocator: std.mem.Allocator, messages: []const msg.Message) ![]c
     return buf.toOwnedSlice(allocator);
 }
 
-fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, _session_uuid: []const u8) !Cmd {
-    _ = _session_uuid; // TODO: re-enable with --session-id
+fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []const u8, is_resume: bool) !Cmd {
     var cmd = Cmd.init(allocator, "claude");
     errdefer cmd.deinit();
     try cmd.arg("-p");
     try cmd.arg(prompt);
     try cmd.option("--output-format", "json");
-    // TODO: re-enable session-id once session reuse is implemented
-    // try cmd.option("--session-id", session_uuid);
-    try cmd.arg("--resume");
+    try cmd.option("--session-id", session_uuid);
+    if (is_resume) try cmd.arg("--resume");
     try cmd.envRemove("CLAUDECODE");
     return cmd;
 }
@@ -94,13 +102,28 @@ fn startFn(ptr: *anyopaque, req: Request) Handle {
     const handle = self.next_handle;
     self.next_handle += 1;
 
-    const uuid = Uuid.v4();
-    const session_uuid = uuid.toStrAlloc(self.allocator) catch return handle;
+    // Look up existing session UUID for this conversation, or create one.
+    const existing = self.conversation_uuids.get(req.conversation_id);
+    const is_resume = existing != null;
+    const session_uuid = existing orelse blk: {
+        const uuid = Uuid.v4();
+        const uuid_str = uuid.toStrAlloc(self.allocator) catch return handle;
+        const key = self.allocator.dupe(u8, req.conversation_id) catch {
+            self.allocator.free(uuid_str);
+            return handle;
+        };
+        self.conversation_uuids.put(key, uuid_str) catch {
+            self.allocator.free(uuid_str);
+            self.allocator.free(key);
+            return handle;
+        };
+        break :blk uuid_str;
+    };
 
     const prompt = buildPrompt(self.allocator, req.messages) catch return handle;
     defer self.allocator.free(prompt);
 
-    var cmd = buildCmd(self.allocator, prompt, session_uuid) catch return handle;
+    var cmd = buildCmd(self.allocator, prompt, session_uuid, is_resume) catch return handle;
     defer cmd.deinit();
 
     const process_id = self.pool.spawn(&cmd, .{ .stderr = .pipe }) catch return handle;
@@ -114,7 +137,6 @@ fn startFn(ptr: *anyopaque, req: Request) Handle {
     }) catch {
         self.pool.kill(process_id);
         self.pool.remove(process_id);
-        self.allocator.free(session_uuid);
         self.allocator.free(conv_id);
     };
 
@@ -160,7 +182,6 @@ fn cancelFn(ptr: *anyopaque, handle: Handle) void {
     if (self.sessions.fetchRemove(handle)) |kv| {
         self.pool.kill(kv.value.process_id);
         self.pool.remove(kv.value.process_id);
-        self.allocator.free(kv.value.session_uuid);
         self.allocator.free(kv.value.conversation_id);
     }
 }
@@ -216,18 +237,35 @@ test "buildPrompt single message" {
     try testing.expectEqualStrings("test\n", prompt);
 }
 
-test "buildCmd produces correct argv" {
-    var cmd = try buildCmd(testing.allocator, "hello world", "abc-123");
+test "buildCmd new session (no resume)" {
+    var cmd = try buildCmd(testing.allocator, "hello world", "abc-123", false);
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
-    try testing.expectEqual(6, argv.len);
+    try testing.expectEqual(7, argv.len);
     try testing.expectEqualStrings("claude", argv[0]);
     try testing.expectEqualStrings("-p", argv[1]);
     try testing.expectEqualStrings("hello world", argv[2]);
     try testing.expectEqualStrings("--output-format", argv[3]);
     try testing.expectEqualStrings("json", argv[4]);
-    try testing.expectEqualStrings("--resume", argv[5]);
+    try testing.expectEqualStrings("--session-id", argv[5]);
+    try testing.expectEqualStrings("abc-123", argv[6]);
+}
+
+test "buildCmd resumed session" {
+    var cmd = try buildCmd(testing.allocator, "follow up", "abc-123", true);
+    defer cmd.deinit();
+
+    const argv = cmd.argv.items;
+    try testing.expectEqual(8, argv.len);
+    try testing.expectEqualStrings("claude", argv[0]);
+    try testing.expectEqualStrings("-p", argv[1]);
+    try testing.expectEqualStrings("follow up", argv[2]);
+    try testing.expectEqualStrings("--output-format", argv[3]);
+    try testing.expectEqualStrings("json", argv[4]);
+    try testing.expectEqualStrings("--session-id", argv[5]);
+    try testing.expectEqualStrings("abc-123", argv[6]);
+    try testing.expectEqualStrings("--resume", argv[7]);
 }
 
 test "parseClaudeResponse valid result" {
