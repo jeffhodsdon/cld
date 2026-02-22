@@ -95,6 +95,7 @@ fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []co
     } else {
         try cmd.option("--session-id", session_uuid);
     }
+    try cmd.arg("--dangerously-skip-permissions");
     try cmd.envRemove("CLAUDECODE");
     return cmd;
 }
@@ -245,7 +246,7 @@ test "buildCmd new session (no resume)" {
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
-    try testing.expectEqual(7, argv.len);
+    try testing.expectEqual(8, argv.len);
     try testing.expectEqualStrings("claude", argv[0]);
     try testing.expectEqualStrings("-p", argv[1]);
     try testing.expectEqualStrings("hello world", argv[2]);
@@ -253,6 +254,7 @@ test "buildCmd new session (no resume)" {
     try testing.expectEqualStrings("json", argv[4]);
     try testing.expectEqualStrings("--session-id", argv[5]);
     try testing.expectEqualStrings("abc-123", argv[6]);
+    try testing.expectEqualStrings("--dangerously-skip-permissions", argv[7]);
 }
 
 test "buildCmd resumed session" {
@@ -260,7 +262,7 @@ test "buildCmd resumed session" {
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
-    try testing.expectEqual(7, argv.len);
+    try testing.expectEqual(8, argv.len);
     try testing.expectEqualStrings("claude", argv[0]);
     try testing.expectEqualStrings("-p", argv[1]);
     try testing.expectEqualStrings("follow up", argv[2]);
@@ -268,6 +270,7 @@ test "buildCmd resumed session" {
     try testing.expectEqualStrings("json", argv[4]);
     try testing.expectEqualStrings("--resume", argv[5]);
     try testing.expectEqualStrings("abc-123", argv[6]);
+    try testing.expectEqualStrings("--dangerously-skip-permissions", argv[7]);
 }
 
 test "parseClaudeResponse valid result" {
