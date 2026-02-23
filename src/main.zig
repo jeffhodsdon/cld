@@ -13,13 +13,17 @@ const version = "0.1.0";
 var running: bool = true;
 
 pub fn main() !void {
-    // Check for --version flag
+    // Check for subcommands
     var args = std.process.args();
     _ = args.skip(); // skip argv[0]
     if (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             const stdout = std.fs.File.stdout().deprecatedWriter();
             stdout.print("cld {s}\n", .{version}) catch {};
+            return;
+        }
+        if (std.mem.eql(u8, arg, "status")) {
+            runStatus();
             return;
         }
     }
@@ -151,5 +155,160 @@ pub fn main() !void {
                 }
             }
         }
+    }
+}
+
+fn runStatus() void {
+    const w = std.fs.File.stdout().deprecatedWriter();
+    const home = std.posix.getenv("HOME") orelse "";
+
+    w.writeAll("\ncld status\n\n") catch {};
+
+    // 1. imsg binary
+    checkBinary(w, "imsg binary", "imsg", "brew install cld (or add imsg to PATH)");
+
+    // 2. claude binary
+    checkBinary(w, "claude binary", "claude", "npm install -g @anthropic-ai/claude-code");
+
+    // 3. Messages DB readable
+    checkMessagesDb(w, home);
+
+    // 4. Config file
+    checkConfig(w, home);
+
+    // 5. Memory directory
+    checkMemoryDir(w, home);
+
+    w.writeAll("\n") catch {};
+}
+
+fn checkBinary(w: anytype, label: []const u8, name: []const u8, fix: []const u8) void {
+    const path_env = std.posix.getenv("PATH") orelse "";
+    var it = std.mem.splitScalar(u8, path_env, ':');
+    while (it.next()) |dir| {
+        if (dir.len == 0) continue;
+        // Build path: dir/name — use stack buffer to avoid allocator
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const dir_len = dir.len;
+        if (dir_len + 1 + name.len > buf.len) continue;
+        @memcpy(buf[0..dir_len], dir);
+        buf[dir_len] = '/';
+        @memcpy(buf[dir_len + 1 ..][0..name.len], name);
+        const full_path = buf[0 .. dir_len + 1 + name.len];
+
+        // Check file exists and is accessible
+        const stat = std.fs.cwd().statFile(full_path) catch continue;
+        _ = stat;
+        printPass(w, label, full_path);
+        return;
+    }
+    printFail(w, label, "not found on PATH", fix);
+}
+
+fn checkMessagesDb(w: anytype, home: []const u8) void {
+    const label = "messages db";
+    if (home.len == 0) {
+        printFail(w, label, "HOME not set", "export HOME");
+        return;
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const suffix = "/Library/Messages/chat.db";
+    if (home.len + suffix.len > buf.len) {
+        printFail(w, label, "path too long", "");
+        return;
+    }
+    @memcpy(buf[0..home.len], home);
+    @memcpy(buf[home.len..][0..suffix.len], suffix);
+    const path = buf[0 .. home.len + suffix.len];
+
+    if (std.fs.cwd().openFile(path, .{})) |file| {
+        file.close();
+        printPass(w, label, "~/Library/Messages/chat.db");
+    } else |_| {
+        printFail(w, label, "~/Library/Messages/chat.db (not readable)", "Grant Full Disk Access to cld in System Settings > Privacy & Security");
+    }
+}
+
+fn checkConfig(w: anytype, home: []const u8) void {
+    const label = "config";
+    if (home.len == 0) {
+        printFail(w, label, "HOME not set", "export HOME");
+        return;
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const suffix = "/.config/cld/config.json";
+    if (home.len + suffix.len > buf.len) {
+        printFail(w, label, "path too long", "");
+        return;
+    }
+    @memcpy(buf[0..home.len], home);
+    @memcpy(buf[home.len..][0..suffix.len], suffix);
+    const path = buf[0 .. home.len + suffix.len];
+
+    if (std.fs.cwd().openFile(path, .{})) |file| {
+        file.close();
+        printPass(w, label, "~/.config/cld/config.json");
+    } else |_| {
+        printFail(w, label, "~/.config/cld/config.json (not found)", "mkdir -p ~/.config/cld && echo '{}' > ~/.config/cld/config.json");
+    }
+}
+
+fn checkMemoryDir(w: anytype, home: []const u8) void {
+    const label = "memory dir";
+
+    // Load config to get memory_path (same as main does)
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var config = Config.load(allocator);
+    defer config.deinit();
+
+    const mem_path = config.memory_path;
+
+    // Resolve display path and actual path
+    const is_absolute = mem_path.len > 0 and mem_path[0] == '/';
+    const is_home_relative = std.mem.startsWith(u8, mem_path, "~/");
+
+    if (is_absolute) {
+        checkDirAccess(w, label, mem_path, mem_path);
+    } else if (is_home_relative) {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const rest = mem_path[2..]; // skip ~/
+        if (home.len + 1 + rest.len > buf.len) {
+            printFail(w, label, "path too long", "");
+            return;
+        }
+        @memcpy(buf[0..home.len], home);
+        buf[home.len] = '/';
+        @memcpy(buf[home.len + 1 ..][0..rest.len], rest);
+        const full = buf[0 .. home.len + 1 + rest.len];
+        checkDirAccess(w, label, mem_path, full);
+    } else {
+        // Relative path — resolve from cwd
+        checkDirAccess(w, label, mem_path, mem_path);
+    }
+}
+
+fn checkDirAccess(w: anytype, label: []const u8, display: []const u8, path: []const u8) void {
+    if (std.fs.cwd().openDir(path, .{})) |dir| {
+        var d = dir;
+        d.close();
+        printPass(w, label, display);
+    } else |_| {
+        var fix_buf: [512]u8 = undefined;
+        const fix = std.fmt.bufPrint(&fix_buf, "mkdir -p {s}", .{display}) catch "mkdir -p <memory_path>";
+        printFail(w, label, display, fix);
+    }
+}
+
+fn printPass(w: anytype, label: []const u8, detail: []const u8) void {
+    w.print("  {s:<16}\xe2\x9c\x93 {s}\n", .{ label, detail }) catch {};
+}
+
+fn printFail(w: anytype, label: []const u8, detail: []const u8, fix: []const u8) void {
+    w.print("  {s:<16}\xe2\x9c\x97 {s}\n", .{ label, detail }) catch {};
+    if (fix.len > 0) {
+        w.print("  {s:<16}  \xe2\x86\x92 {s}\n", .{ "", fix }) catch {};
     }
 }
