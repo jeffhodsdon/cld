@@ -11,6 +11,37 @@ const Handle = @import("message").Handle;
 const build_options = @import("build_options");
 
 const version = "0.1.0";
+const git_hash = build_options.git_hash;
+
+pub const std_options: std.Options = .{
+    .logFn = customLog,
+};
+
+fn customLog(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    _ = scope;
+    const prefix = comptime switch (level) {
+        .err => "ERROR",
+        .warn => "WARN ",
+        .info => "INFO ",
+        .debug => "DEBUG",
+    };
+
+    // Get wall clock time
+    const epoch = std.time.timestamp();
+    const es = std.time.epoch.EpochSeconds{ .secs = @intCast(epoch) };
+    const day_secs = es.getDaySeconds();
+    const h = day_secs.getHoursIntoDay();
+    const m = day_secs.getMinutesIntoHour();
+    const s = day_secs.getSecondsIntoMinute();
+
+    const stderr = std.fs.File.stderr().deprecatedWriter();
+    nosuspend stderr.print("{d:0>2}:{d:0>2}:{d:0>2} {s} [{s}-{s}] " ++ format ++ "\n", .{h, m, s, prefix, version, git_hash} ++ args) catch {};
+}
 
 var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var signal_pipe: [2]posix.fd_t = .{ -1, -1 };
@@ -59,6 +90,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    std.log.info("starting", .{});
 
     // Load config
     var config = Config.load(allocator);
