@@ -301,7 +301,13 @@ fn processQueue(self: *Claude) void {
         self.allocator.free(q.prompt);
         self.allocator.free(q.system_prompt);
 
-        std.log.info("processing [{s}]", .{q.conversation_id});
+        std.log.info("processing [{s}] ({s})", .{
+            q.conversation_id,
+            if (is_resume) "resume" else "new session",
+        });
+        if (std.mem.indexOf(u8, q.prompt, "[Attachment:") != null) {
+            std.log.info("prompt contains attachment refs: {s}", .{q.prompt});
+        }
     }
 }
 

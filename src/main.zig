@@ -147,6 +147,14 @@ pub fn main() !void {
                                 continue;
                             }
                             std.log.info("recv [{s}] {s}", .{ inbound.sender, inbound.text });
+                            if (inbound.attachments.len > 0) {
+                                std.log.info("recv {d} attachment(s):", .{inbound.attachments.len});
+                                for (inbound.attachments) |path| {
+                                    // Check if file exists
+                                    const exists = if (std.fs.cwd().statFile(path)) |_| true else |_| false;
+                                    std.log.info("  -> {s} (exists={})", .{ path, exists });
+                                }
+                            }
                             memory.logMessage("recv", inbound.sender, inbound.text);
 
                             // Build system prompt fresh each message (picks up file changes via stat check)

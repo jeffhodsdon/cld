@@ -69,6 +69,17 @@ fn pollFn(ptr: *anyopaque) ?InboundMessage {
     while (i > 0) {
         i -= 1;
         if (parseJsonMessage(self.parse_arena.allocator(), lines[i])) |message| {
+            // Debug: log raw JSON when attachments are expected
+            if (message.attachments.len > 0 or hasObjectReplacement(message.text)) {
+                std.log.info("attachment debug raw json: {s}", .{lines[i]});
+                std.log.info("attachment debug parsed: {d} path(s), text_has_obj_repl={}", .{
+                    message.attachments.len,
+                    hasObjectReplacement(message.text),
+                });
+                for (message.attachments) |path| {
+                    std.log.info("attachment debug path: {s}", .{path});
+                }
+            }
             return message;
         }
     }
@@ -199,6 +210,13 @@ fn parseIso8601(s: []const u8) ?i64 {
         @as(i64, hour) * 3600 +
         @as(i64, minute) * 60 +
         @as(i64, second);
+}
+
+/// Check if text contains U+FFFC (object replacement character) — indicates
+/// an inline attachment in iMessage that may not have been parsed.
+fn hasObjectReplacement(text: []const u8) bool {
+    // U+FFFC = 0xEF 0xBF 0xBC in UTF-8
+    return std.mem.indexOf(u8, text, "\xef\xbf\xbc") != null;
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
