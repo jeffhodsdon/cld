@@ -11,6 +11,9 @@ pub fn build(b: *std.Build) void {
     const memory_mod = b.createModule(.{ .root_source_file = b.path("src/memory.zig") });
     const uuid_mod = b.createModule(.{ .root_source_file = b.path("src/Uuid.zig") });
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/Config.zig") });
+    const prompts_mod = b.createModule(.{ .root_source_file = b.path("src/prompts.zig") });
+    prompts_mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
+    prompts_mod.addAnonymousImport("summarize_prompt", .{ .root_source_file = b.path("prompts/summarize.md") });
 
     // ── Library modules (with dependencies) ────────────────────────────
 
@@ -52,6 +55,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("imessage", imessage_mod);
     exe_mod.addImport("claude", claude_mod);
     exe_mod.addImport("memory", memory_mod);
+    exe_mod.addImport("prompts", prompts_mod);
     exe_mod.addImport("ProcessPool", pool_mod);
     exe_mod.addImport("message", message_mod);
 
@@ -79,6 +83,7 @@ pub fn build(b: *std.Build) void {
     addTestTarget(b, test_step, "cmd", b.path("src/Cmd.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "config", b.path("src/Config.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "uuid", b.path("src/Uuid.zig"), target, optimize, &.{});
+    addTestTarget(b, test_step, "memory", b.path("src/memory.zig"), target, optimize, &.{});
 
     // Process -> Cmd
     addTestTarget(b, test_step, "process", b.path("src/Process.zig"), target, optimize, &.{

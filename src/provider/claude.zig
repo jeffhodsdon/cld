@@ -84,12 +84,15 @@ fn buildPrompt(allocator: std.mem.Allocator, messages: []const msg.Message) ![]c
     return buf.toOwnedSlice(allocator);
 }
 
-fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []const u8, is_resume: bool) !Cmd {
+fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []const u8, is_resume: bool, system_prompt: []const u8) !Cmd {
     var cmd = Cmd.init(allocator, "claude");
     errdefer cmd.deinit();
     try cmd.arg("-p");
     try cmd.arg(prompt);
     try cmd.option("--output-format", "json");
+    if (system_prompt.len > 0) {
+        try cmd.option("--system-prompt", system_prompt);
+    }
     if (is_resume) {
         try cmd.option("--resume", session_uuid);
     } else {
@@ -127,7 +130,7 @@ fn startFn(ptr: *anyopaque, req: Request) Handle {
     const prompt = buildPrompt(self.allocator, req.messages) catch return handle;
     defer self.allocator.free(prompt);
 
-    var cmd = buildCmd(self.allocator, prompt, session_uuid, is_resume) catch return handle;
+    var cmd = buildCmd(self.allocator, prompt, session_uuid, is_resume, req.system_prompt) catch return handle;
     defer cmd.deinit();
 
     const process_id = self.pool.spawn(&cmd, .{ .stderr = .pipe }) catch return handle;
@@ -242,7 +245,7 @@ test "buildPrompt single message" {
 }
 
 test "buildCmd new session (no resume)" {
-    var cmd = try buildCmd(testing.allocator, "hello world", "abc-123", false);
+    var cmd = try buildCmd(testing.allocator, "hello world", "abc-123", false, "");
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
@@ -258,7 +261,7 @@ test "buildCmd new session (no resume)" {
 }
 
 test "buildCmd resumed session" {
-    var cmd = try buildCmd(testing.allocator, "follow up", "abc-123", true);
+    var cmd = try buildCmd(testing.allocator, "follow up", "abc-123", true, "");
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
@@ -271,6 +274,24 @@ test "buildCmd resumed session" {
     try testing.expectEqualStrings("--resume", argv[5]);
     try testing.expectEqualStrings("abc-123", argv[6]);
     try testing.expectEqualStrings("--dangerously-skip-permissions", argv[7]);
+}
+
+test "buildCmd with system prompt" {
+    var cmd = try buildCmd(testing.allocator, "hello", "abc-123", false, "Be helpful");
+    defer cmd.deinit();
+
+    const argv = cmd.argv.items;
+    try testing.expectEqual(10, argv.len);
+    try testing.expectEqualStrings("claude", argv[0]);
+    try testing.expectEqualStrings("-p", argv[1]);
+    try testing.expectEqualStrings("hello", argv[2]);
+    try testing.expectEqualStrings("--output-format", argv[3]);
+    try testing.expectEqualStrings("json", argv[4]);
+    try testing.expectEqualStrings("--system-prompt", argv[5]);
+    try testing.expectEqualStrings("Be helpful", argv[6]);
+    try testing.expectEqualStrings("--session-id", argv[7]);
+    try testing.expectEqualStrings("abc-123", argv[8]);
+    try testing.expectEqualStrings("--dangerously-skip-permissions", argv[9]);
 }
 
 test "parseClaudeResponse valid result" {

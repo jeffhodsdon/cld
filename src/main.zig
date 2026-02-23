@@ -4,14 +4,28 @@ const Config = @import("Config");
 const IMessage = @import("imessage");
 const Claude = @import("claude");
 const Memory = @import("memory");
+const prompts = @import("prompts");
 const ProcessPool = @import("ProcessPool");
 const Handle = @import("message").Handle;
+
+const version = "0.1.0";
 
 var running: bool = true;
 
 pub fn main() !void {
-    // Handle SIGINT (Ctrl+C) for clean shutdown
-    posix.sigaction(posix.SIG.INT, &.{
+    // Check for --version flag
+    var args = std.process.args();
+    _ = args.skip(); // skip argv[0]
+    if (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--version")) {
+            const stdout = std.fs.File.stdout().deprecatedWriter();
+            stdout.print("cld {s}\n", .{version}) catch {};
+            return;
+        }
+    }
+
+    // Handle SIGINT/SIGTERM for clean shutdown
+    const sa = posix.Sigaction{
         .handler = .{ .handler = struct {
             fn handler(_: c_int) callconv(.c) void {
                 running = false;
@@ -19,7 +33,10 @@ pub fn main() !void {
         }.handler },
         .mask = posix.sigemptyset(),
         .flags = 0,
-    }, null);
+    };
+    posix.sigaction(posix.SIG.INT, &sa, null);
+    posix.sigaction(posix.SIG.TERM, &sa, null);
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -33,8 +50,17 @@ pub fn main() !void {
     defer pool.deinit();
 
     // Init components
-    var memory = try Memory.init(allocator, config.memory_path);
+    var memory = Memory.init(allocator, config.memory_path);
     defer memory.deinit();
+
+    const mem_ctx = memory.getContext() catch "";
+    defer if (mem_ctx.len > 0) allocator.free(mem_ctx);
+
+    const system_prompt = if (mem_ctx.len > 0)
+        std.fmt.allocPrint(allocator, "{s}\n\n{s}", .{ prompts.system, mem_ctx }) catch prompts.system
+    else
+        prompts.system;
+    defer if (system_prompt.ptr != prompts.system.ptr) allocator.free(system_prompt);
 
     var imsg = try IMessage.init(allocator, &pool);
     defer imsg.deinit();
@@ -57,13 +83,14 @@ pub fn main() !void {
                                 continue;
                             }
                             std.log.info("recv [{s}] {s}", .{ inbound.sender, inbound.text });
+                            memory.logMessage("recv", inbound.sender, inbound.text);
                             _ = claude.provider().start(.{
                                 .conversation_id = inbound.channel_id,
                                 .messages = &.{.{
                                     .role = .user,
                                     .content = inbound.text,
                                 }},
-                                .system_prompt = config.providers.claude.system_prompt,
+                                .system_prompt = system_prompt,
                             });
                         }
                     },
@@ -105,6 +132,7 @@ pub fn main() !void {
                             if (claude.provider().poll(handle)) |response| {
                                 if (response.done and response.text.len > 0) {
                                     std.log.info("send [{s}] {s}", .{ conv_id, response.text });
+                                    memory.logMessage("send", conv_id, response.text);
                                     imsg.adapter().send(.{
                                         .channel_id = conv_id,
                                         .text = response.text,

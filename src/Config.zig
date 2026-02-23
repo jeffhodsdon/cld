@@ -11,23 +11,13 @@ pub const AdaptersConfig = struct {
     imessage: IMessageConfig = .{},
 };
 
-pub const ClaudeConfig = struct {
-    system_prompt: []const u8 = "You are a helpful assistant.",
-};
-
-pub const ProvidersConfig = struct {
-    claude: ClaudeConfig = .{},
-};
-
 /// JSON-parseable schema (no runtime-only fields).
 const Schema = struct {
     adapters: AdaptersConfig = .{},
-    providers: ProvidersConfig = .{},
     memory_path: []const u8 = "memory",
 };
 
 adapters: AdaptersConfig = .{},
-providers: ProvidersConfig = .{},
 memory_path: []const u8 = "memory",
 
 /// Arena backing parsed string slices. Null when using defaults.
@@ -51,7 +41,6 @@ pub fn load(allocator: std.mem.Allocator) Config {
 
     return .{
         .adapters = parsed.value.adapters,
-        .providers = parsed.value.providers,
         .memory_path = parsed.value.memory_path,
         .arena = parsed.arena,
     };
@@ -90,11 +79,6 @@ test "parse full config" {
         \\      "allowed_senders": ["+12125551234", "+14155559876"]
         \\    }
         \\  },
-        \\  "providers": {
-        \\    "claude": {
-        \\      "system_prompt": "Be concise."
-        \\    }
-        \\  },
         \\  "memory_path": "/tmp/cld-memory"
         \\}
     ;
@@ -105,7 +89,6 @@ test "parse full config" {
     try std.testing.expectEqual(2, cfg.adapters.imessage.allowed_senders.len);
     try std.testing.expectEqualStrings("+12125551234", cfg.adapters.imessage.allowed_senders[0]);
     try std.testing.expectEqualStrings("+14155559876", cfg.adapters.imessage.allowed_senders[1]);
-    try std.testing.expectEqualStrings("Be concise.", cfg.providers.claude.system_prompt);
     try std.testing.expectEqualStrings("/tmp/cld-memory", cfg.memory_path);
 }
 
@@ -115,7 +98,6 @@ test "parse empty JSON uses defaults" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(0, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("You are a helpful assistant.", cfg.providers.claude.system_prompt);
     try std.testing.expectEqualStrings("memory", cfg.memory_path);
 }
 
@@ -134,7 +116,6 @@ test "parse partial config — adapters only" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(1, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("You are a helpful assistant.", cfg.providers.claude.system_prompt);
     try std.testing.expectEqualStrings("memory", cfg.memory_path);
 }
 
@@ -147,7 +128,6 @@ test "isSenderAllowed with allowlist" {
 
     const config: Config = .{
         .adapters = cfg.adapters,
-        .providers = cfg.providers,
         .memory_path = cfg.memory_path,
     };
 
@@ -175,7 +155,6 @@ test "load missing file returns defaults" {
     defer config.deinit();
 
     try std.testing.expectEqual(0, config.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("You are a helpful assistant.", config.providers.claude.system_prompt);
     try std.testing.expectEqualStrings("memory", config.memory_path);
     try std.testing.expect(config.arena == null);
 }

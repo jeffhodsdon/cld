@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64-macos
+            name: aarch64-apple-darwin
+          - arch: x86_64-macos
+            name: x86_64-apple-darwin
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build -Dtarget=${{ matrix.arch }} -Doptimize=ReleaseSafe
+
+      - name: Package
+        run: |
+          tar -czf "cld-${{ matrix.name }}.tar.gz" -C zig-out/bin cld
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: cld-${{ matrix.name }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Delete existing latest release
+        run: gh release delete latest --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create latest release
+        run: |
+          gh release create latest \
+            --title "Latest ($(git rev-parse --short HEAD))" \
+            --notes "Built from main at $(git rev-parse --short HEAD)" \
+            --prerelease \
+            aarch64-apple-darwin/*.tar.gz \
+            x86_64-apple-darwin/*.tar.gz
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Dispatch tap update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          repository: jeffhodsdon/homebrew-tap
+          event-type: update-formula
+          client-payload: '{"sha": "${{ github.sha }}"}'
