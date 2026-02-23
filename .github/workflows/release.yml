@@ -64,10 +64,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Get build number
+        id: buildnum
+        run: echo "count=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Dispatch tap update
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           repository: jeffhodsdon/homebrew-tap
           event-type: update-formula
-          client-payload: '{"sha": "${{ github.sha }}"}'
+          client-payload: '{"sha": "${{ github.sha }}", "build_number": "${{ steps.buildnum.outputs.count }}"}'
