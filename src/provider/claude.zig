@@ -17,11 +17,19 @@ const SessionInfo = struct {
     conversation_id: []const u8,
 };
 
+const QueuedMessage = struct {
+    prompt: []const u8,
+    system_prompt: []const u8,
+    conversation_id: []const u8,
+};
+
 allocator: std.mem.Allocator,
 pool: *ProcessPool,
 sessions: std.AutoHashMap(Handle, SessionInfo),
 /// Maps conversation_id → session_uuid for reuse across messages.
 conversation_uuids: std.StringHashMap([]const u8),
+/// FIFO message queue — processed one at a time per conversation.
+queue: std.ArrayListUnmanaged(QueuedMessage),
 next_handle: u64,
 
 pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool) Claude {
@@ -30,6 +38,7 @@ pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool) Claude {
         .pool = pool,
         .sessions = std.AutoHashMap(Handle, SessionInfo).init(allocator),
         .conversation_uuids = std.StringHashMap([]const u8).init(allocator),
+        .queue = .empty,
         .next_handle = 0,
     };
 }
@@ -43,6 +52,14 @@ pub fn deinit(self: *Claude) void {
         self.allocator.free(session.conversation_id);
     }
     self.sessions.deinit();
+
+    // Free queued messages
+    for (self.queue.items) |q| {
+        self.allocator.free(q.prompt);
+        self.allocator.free(q.system_prompt);
+        self.allocator.free(q.conversation_id);
+    }
+    self.queue.deinit(self.allocator);
 
     // Free conversation UUID mappings
     var cit = self.conversation_uuids.iterator();
@@ -109,45 +126,116 @@ fn startFn(ptr: *anyopaque, req: Request) Handle {
     const handle = self.next_handle;
     self.next_handle += 1;
 
-    // Look up existing session UUID for this conversation, or create one.
-    const existing = self.conversation_uuids.get(req.conversation_id);
-    const is_resume = existing != null;
-    const session_uuid = existing orelse blk: {
-        const uuid = Uuid.v4();
-        const uuid_str = uuid.toStrAlloc(self.allocator) catch return handle;
-        const key = self.allocator.dupe(u8, req.conversation_id) catch {
-            self.allocator.free(uuid_str);
-            return handle;
-        };
-        self.conversation_uuids.put(key, uuid_str) catch {
-            self.allocator.free(uuid_str);
-            self.allocator.free(key);
-            return handle;
-        };
-        break :blk uuid_str;
+    // Enqueue the message; processQueue will spawn when the conversation is free.
+    const prompt = buildPrompt(self.allocator, req.messages) catch return handle;
+    const conv_id = self.allocator.dupe(u8, req.conversation_id) catch {
+        self.allocator.free(prompt);
+        return handle;
+    };
+    const sys = self.allocator.dupe(u8, req.system_prompt) catch {
+        self.allocator.free(prompt);
+        self.allocator.free(conv_id);
+        return handle;
     };
 
-    const prompt = buildPrompt(self.allocator, req.messages) catch return handle;
-    defer self.allocator.free(prompt);
-
-    var cmd = buildCmd(self.allocator, prompt, session_uuid, is_resume, req.system_prompt) catch return handle;
-    defer cmd.deinit();
-
-    const process_id = self.pool.spawn(&cmd, .{ .stderr = .pipe }) catch return handle;
-
-    const conv_id = self.allocator.dupe(u8, req.conversation_id) catch return handle;
-
-    self.sessions.put(handle, .{
-        .process_id = process_id,
-        .session_uuid = session_uuid,
+    self.queue.append(self.allocator, .{
+        .prompt = prompt,
+        .system_prompt = sys,
         .conversation_id = conv_id,
     }) catch {
-        self.pool.kill(process_id);
-        self.pool.remove(process_id);
+        self.allocator.free(prompt);
         self.allocator.free(conv_id);
+        self.allocator.free(sys);
+        return handle;
     };
 
+    self.processQueue();
     return handle;
+}
+
+fn hasActiveSession(self: *Claude, conversation_id: []const u8) bool {
+    var it = self.sessions.valueIterator();
+    while (it.next()) |session| {
+        if (std.mem.eql(u8, session.conversation_id, conversation_id)) return true;
+    }
+    return false;
+}
+
+/// Dequeue and spawn one message per conversation that has no active session.
+fn processQueue(self: *Claude) void {
+    var i: usize = 0;
+    while (i < self.queue.items.len) {
+        const q = self.queue.items[i];
+
+        if (self.hasActiveSession(q.conversation_id)) {
+            i += 1;
+            continue;
+        }
+
+        // Remove from queue (order-preserving)
+        _ = self.queue.orderedRemove(i);
+
+        // Ensure conversation UUID exists
+        const existing = self.conversation_uuids.get(q.conversation_id);
+        const is_resume = existing != null;
+        const session_uuid = existing orelse blk: {
+            const uuid = Uuid.v4();
+            const uuid_str = uuid.toStrAlloc(self.allocator) catch {
+                self.freeQueued(q);
+                continue;
+            };
+            const key = self.allocator.dupe(u8, q.conversation_id) catch {
+                self.allocator.free(uuid_str);
+                self.freeQueued(q);
+                continue;
+            };
+            self.conversation_uuids.put(key, uuid_str) catch {
+                self.allocator.free(uuid_str);
+                self.allocator.free(key);
+                self.freeQueued(q);
+                continue;
+            };
+            break :blk uuid_str;
+        };
+
+        var cmd = buildCmd(self.allocator, q.prompt, session_uuid, is_resume, q.system_prompt) catch {
+            self.freeQueued(q);
+            continue;
+        };
+        defer cmd.deinit();
+
+        const process_id = self.pool.spawn(&cmd, .{ .stderr = .pipe }) catch {
+            self.freeQueued(q);
+            continue;
+        };
+
+        const new_handle = self.next_handle;
+        self.next_handle += 1;
+
+        // conversation_id transfers ownership to the session
+        self.sessions.put(new_handle, .{
+            .process_id = process_id,
+            .session_uuid = session_uuid,
+            .conversation_id = q.conversation_id,
+        }) catch {
+            self.pool.kill(process_id);
+            self.pool.remove(process_id);
+            self.freeQueued(q);
+            continue;
+        };
+
+        // prompt and system_prompt are no longer needed
+        self.allocator.free(q.prompt);
+        self.allocator.free(q.system_prompt);
+
+        std.log.info("processing [{s}]", .{q.conversation_id});
+    }
+}
+
+fn freeQueued(self: *Claude, q: QueuedMessage) void {
+    self.allocator.free(q.prompt);
+    self.allocator.free(q.system_prompt);
+    self.allocator.free(q.conversation_id);
 }
 
 fn pollFn(ptr: *anyopaque, handle: Handle) ?Response {
@@ -191,6 +279,9 @@ fn cancelFn(ptr: *anyopaque, handle: Handle) void {
         self.pool.remove(kv.value.process_id);
         self.allocator.free(kv.value.conversation_id);
     }
+
+    // Process next queued message for this (now-free) conversation
+    self.processQueue();
 }
 
 fn deinitFn(ptr: *anyopaque) void {
@@ -207,9 +298,10 @@ fn parseClaudeResponse(allocator: std.mem.Allocator, line: []const u8) ?[]const 
 
     if (parsed.value.is_error) return null;
     const result = parsed.value.result orelse return null;
-    if (result.len == 0) return null;
+    const trimmed = std.mem.trim(u8, result, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
 
-    return allocator.dupe(u8, result) catch null;
+    return allocator.dupe(u8, trimmed) catch null;
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -330,4 +422,151 @@ test "parseClaudeResponse malformed JSON" {
     try testing.expect(parseClaudeResponse(testing.allocator, "not json") == null);
     try testing.expect(parseClaudeResponse(testing.allocator, "") == null);
     try testing.expect(parseClaudeResponse(testing.allocator, "{}") == null);
+}
+
+test "parseClaudeResponse trims whitespace" {
+    const json =
+        \\{"result":"\n\nHello!\n\n","is_error":false}
+    ;
+    const text = parseClaudeResponse(testing.allocator, json) orelse
+        return error.ExpectedResult;
+    defer testing.allocator.free(text);
+
+    try testing.expectEqualStrings("Hello!", text);
+}
+
+test "message queued when conversation has active session" {
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool);
+    defer claude.deinit();
+
+    // Spawn a real process to act as the active session
+    var cmd = Cmd.init(testing.allocator, "/bin/sleep");
+    defer cmd.deinit();
+    try cmd.arg("60");
+    const pid = try pool.spawn(&cmd, .{});
+
+    // Register it as an active session for "conv-1"
+    const conv_id = try testing.allocator.dupe(u8, "conv-1");
+    try claude.sessions.put(0, .{
+        .process_id = pid,
+        .session_uuid = "fake-uuid",
+        .conversation_id = conv_id,
+    });
+
+    // Start a message for the same conversation
+    _ = claude.provider().start(.{
+        .conversation_id = "conv-1",
+        .messages = &.{.{ .role = .user, .content = "hello" }},
+        .system_prompt = "",
+    });
+
+    // Message should be queued, not spawned
+    try testing.expectEqual(@as(usize, 1), claude.queue.items.len);
+    try testing.expectEqualStrings("conv-1", claude.queue.items[0].conversation_id);
+    try testing.expectEqualStrings("hello\n", claude.queue.items[0].prompt);
+}
+
+test "multiple messages queued in order" {
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool);
+    defer claude.deinit();
+
+    // Spawn a real process as active session
+    var cmd = Cmd.init(testing.allocator, "/bin/sleep");
+    defer cmd.deinit();
+    try cmd.arg("60");
+    const pid = try pool.spawn(&cmd, .{});
+
+    const conv_id = try testing.allocator.dupe(u8, "conv-1");
+    try claude.sessions.put(0, .{
+        .process_id = pid,
+        .session_uuid = "fake-uuid",
+        .conversation_id = conv_id,
+    });
+
+    // Queue two messages
+    _ = claude.provider().start(.{
+        .conversation_id = "conv-1",
+        .messages = &.{.{ .role = .user, .content = "first" }},
+        .system_prompt = "",
+    });
+    _ = claude.provider().start(.{
+        .conversation_id = "conv-1",
+        .messages = &.{.{ .role = .user, .content = "second" }},
+        .system_prompt = "",
+    });
+
+    // Both queued in FIFO order
+    try testing.expectEqual(@as(usize, 2), claude.queue.items.len);
+    try testing.expectEqualStrings("first\n", claude.queue.items[0].prompt);
+    try testing.expectEqualStrings("second\n", claude.queue.items[1].prompt);
+}
+
+test "hasActiveSession" {
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool);
+    defer claude.deinit();
+
+    try testing.expect(!claude.hasActiveSession("conv-1"));
+
+    // Add an active session
+    var cmd = Cmd.init(testing.allocator, "/bin/sleep");
+    defer cmd.deinit();
+    try cmd.arg("60");
+    const pid = try pool.spawn(&cmd, .{});
+
+    const conv_id = try testing.allocator.dupe(u8, "conv-1");
+    try claude.sessions.put(0, .{
+        .process_id = pid,
+        .session_uuid = "fake-uuid",
+        .conversation_id = conv_id,
+    });
+
+    try testing.expect(claude.hasActiveSession("conv-1"));
+    try testing.expect(!claude.hasActiveSession("conv-2"));
+}
+
+test "different conversations not blocked by each other" {
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool);
+    defer claude.deinit();
+
+    // Active session for conv-1
+    var cmd = Cmd.init(testing.allocator, "/bin/sleep");
+    defer cmd.deinit();
+    try cmd.arg("60");
+    const pid = try pool.spawn(&cmd, .{});
+
+    const conv_id = try testing.allocator.dupe(u8, "conv-1");
+    try claude.sessions.put(0, .{
+        .process_id = pid,
+        .session_uuid = "fake-uuid",
+        .conversation_id = conv_id,
+    });
+
+    // Message for conv-1 should be queued
+    _ = claude.provider().start(.{
+        .conversation_id = "conv-1",
+        .messages = &.{.{ .role = .user, .content = "blocked" }},
+        .system_prompt = "",
+    });
+    try testing.expectEqual(@as(usize, 1), claude.queue.items.len);
+
+    // conv-2 has no active session — processQueue will try to spawn "claude"
+    // which will fail, but the message should NOT remain in the queue
+    _ = claude.provider().start(.{
+        .conversation_id = "conv-2",
+        .messages = &.{.{ .role = .user, .content = "free" }},
+        .system_prompt = "",
+    });
+
+    // conv-2 message was dequeued (processQueue attempted it)
+    // conv-1 message still queued
+    try testing.expectEqual(@as(usize, 1), claude.queue.items.len);
+    try testing.expectEqualStrings("conv-1", claude.queue.items[0].conversation_id);
 }
