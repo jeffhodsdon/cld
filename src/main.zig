@@ -11,7 +11,7 @@ const Handle = @import("message").Handle;
 
 const version = "0.1.0";
 
-var running: bool = true;
+var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 
 pub fn main() !void {
     // Check for subcommands
@@ -33,7 +33,7 @@ pub fn main() !void {
     const sa = posix.Sigaction{
         .handler = .{ .handler = struct {
             fn handler(_: c_int) callconv(.c) void {
-                running = false;
+                running.store(false, .release);
             }
         }.handler },
         .mask = posix.sigemptyset(),
@@ -84,7 +84,7 @@ pub fn main() !void {
     defer claude.deinit();
 
     // Event-driven main loop
-    while (running) {
+    while (running.load(.acquire)) {
         const events = try pool.poll(100);
 
         for (events) |event| {
@@ -110,7 +110,7 @@ pub fn main() !void {
                         }
                     },
                     .exited => {
-                        if (!running) break;
+                        if (!running.load(.acquire)) break;
                         // Drain stderr for debug info
                         if (pool.get(event.id)) |proc| {
                             const stderr = proc.drainStderr() catch "";
