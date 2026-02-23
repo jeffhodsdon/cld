@@ -36,6 +36,7 @@ processes: std.AutoHashMap(Id, *Process),
 next_id: Id,
 allocator: std.mem.Allocator,
 events_buf: std.ArrayListUnmanaged(Event),
+signal_fd: ?posix.fd_t = null,
 
 pub fn init(allocator: std.mem.Allocator) ProcessPool {
     return .{
@@ -44,6 +45,11 @@ pub fn init(allocator: std.mem.Allocator) ProcessPool {
         .allocator = allocator,
         .events_buf = .empty,
     };
+}
+
+/// Set a file descriptor (read end of a pipe) that wakes poll() on signal.
+pub fn setSignalFd(self: *ProcessPool, fd: posix.fd_t) void {
+    self.signal_fd = fd;
 }
 
 pub fn deinit(self: *ProcessPool) void {
@@ -116,6 +122,17 @@ pub fn poll(self: *ProcessPool, timeout_ms: i32) ![]const Event {
         }
     }
 
+    // Add signal pipe fd if set (for waking poll on SIGINT/SIGTERM)
+    const signal_fd_idx: ?usize = if (self.signal_fd) |sfd| blk: {
+        if (n_fds < MAX_FDS) {
+            const idx = n_fds;
+            fds[n_fds] = .{ .fd = sfd, .events = std.c.POLL.IN, .revents = 0 };
+            n_fds += 1;
+            break :blk idx;
+        }
+        break :blk null;
+    } else null;
+
     // Poll
     if (n_fds > 0) {
         _ = try posix.poll(fds[0..n_fds], timeout_ms);
@@ -125,8 +142,18 @@ pub fn poll(self: *ProcessPool, timeout_ms: i32) ![]const Event {
         }
     }
 
-    // Check for readable fds
-    for (0..n_fds) |i| {
+    // Drain signal pipe if it was signaled
+    if (signal_fd_idx) |idx| {
+        const revents: u16 = @bitCast(fds[idx].revents);
+        if (revents & std.c.POLL.IN != 0) {
+            var buf: [1]u8 = undefined;
+            _ = posix.read(self.signal_fd.?, &buf) catch {};
+        }
+    }
+
+    // Check for readable fds (skip signal fd)
+    const process_fds = if (signal_fd_idx) |idx| idx else n_fds;
+    for (0..process_fds) |i| {
         const revents: u16 = @bitCast(fds[i].revents);
         const mask: u16 = std.c.POLL.IN | std.c.POLL.HUP | std.c.POLL.ERR;
         if (revents & mask != 0) {

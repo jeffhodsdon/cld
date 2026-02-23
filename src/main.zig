@@ -12,6 +12,7 @@ const Handle = @import("message").Handle;
 const version = "0.1.0";
 
 var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var signal_pipe: [2]posix.fd_t = .{ -1, -1 };
 
 pub fn main() !void {
     // Check for subcommands
@@ -29,11 +30,23 @@ pub fn main() !void {
         }
     }
 
+    // Self-pipe for waking poll() on signal
+    signal_pipe = try posix.pipe();
+    // Set write end to non-blocking so signal handler never blocks
+    // O_NONBLOCK on macOS = 0x0004
+    _ = try posix.fcntl(signal_pipe[1], std.c.F.SETFL, 0x0004);
+    defer {
+        posix.close(signal_pipe[0]);
+        posix.close(signal_pipe[1]);
+    }
+
     // Handle SIGINT/SIGTERM for clean shutdown
     const sa = posix.Sigaction{
         .handler = .{ .handler = struct {
             fn handler(_: c_int) callconv(.c) void {
                 running.store(false, .release);
+                // Wake up poll() via self-pipe
+                _ = posix.write(signal_pipe[1], "x") catch {};
             }
         }.handler },
         .mask = posix.sigemptyset(),
@@ -53,6 +66,7 @@ pub fn main() !void {
     // Shared process pool
     var pool = ProcessPool.init(allocator);
     defer pool.deinit();
+    pool.setSignalFd(signal_pipe[0]);
 
     // Resolve memory path: config override or ~/.local/share/cld/memory
     const resolved_memory_path = config.memory_path orelse resolvePath: {
@@ -181,13 +195,16 @@ fn runStatus() void {
     // 2. claude binary
     checkBinary(w, "claude binary", "claude", "npm install -g @anthropic-ai/claude-code");
 
-    // 3. Messages DB readable
+    // 3. Claude auth
+    checkClaudeAuth(w);
+
+    // 4. Messages DB readable
     checkMessagesDb(w, home);
 
-    // 4. Config file
+    // 5. Config file
     checkConfig(w, home);
 
-    // 5. Memory directory
+    // 6. Memory directory
     checkMemoryDir(w, home);
 
     w.writeAll("\n") catch {};
@@ -214,6 +231,51 @@ fn checkBinary(w: anytype, label: []const u8, name: []const u8, fix: []const u8)
         return;
     }
     printFail(w, label, "not found on PATH", fix);
+}
+
+fn checkClaudeAuth(w: anytype) void {
+    const label = "claude auth";
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var cmd = Cmd.init(allocator, "claude");
+    defer cmd.deinit();
+    cmd.arg("auth") catch return;
+    cmd.arg("status") catch return;
+    cmd.arg("--json") catch return;
+    cmd.envRemove("CLAUDECODE") catch return;
+
+    var result = ProcessPool.exec(allocator, &cmd) catch {
+        printFail(w, label, "failed to run claude", "Check claude binary");
+        return;
+    };
+    defer result.deinit();
+
+    if (result.exit_code != 0) {
+        printFail(w, label, "not authenticated", "Run: claude /login");
+        return;
+    }
+
+    // Parse JSON properly instead of string matching
+    const AuthStatus = struct {
+        loggedIn: bool = false,
+        email: ?[]const u8 = null,
+    };
+    const parsed = std.json.parseFromSlice(AuthStatus, allocator, result.stdout, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        printFail(w, label, "unexpected response from claude auth status", "");
+        return;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value.loggedIn) {
+        printPass(w, label, parsed.value.email orelse "logged in");
+    } else {
+        printFail(w, label, "not logged in", "Run: claude /login");
+    }
 }
 
 fn checkMessagesDb(w: anytype, home: []const u8) void {
