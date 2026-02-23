@@ -27,7 +27,7 @@ jobs:
           version: 0.15.2
 
       - name: Build
-        run: zig build -Dtarget=${{ matrix.arch }} -Doptimize=ReleaseSafe
+        run: zig build -Dtarget=${{ matrix.arch }} -Doptimize=ReleaseSafe -Dgit-hash=$(git rev-parse --short HEAD)
 
       - name: Package
         run: |
