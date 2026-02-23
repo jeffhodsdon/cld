@@ -235,35 +235,30 @@ fn checkMessagesDb(w: anytype, home: []const u8) void {
     if (std.fs.cwd().openFile(path, .{})) |file| {
         file.close();
         // File is readable — but this may be inherited from the terminal's FDA.
-        // Query TCC.db to check if the actual binaries have their own FDA grants,
-        // which is what matters when running as a brew service (launchd).
-        const cld_has_fda = checkTccFda("cld");
-        const imsg_has_fda = checkTccFda("imsg");
+        // The brew service runs from a stable path (/opt/homebrew/var/cld/cld)
+        // which is what needs FDA. Check that path in TCC.
+        const service_path = "/opt/homebrew/var/cld/cld";
+        const service_has_fda = checkTccFdaPath(service_path);
 
-        if (cld_has_fda and imsg_has_fda) {
+        if (service_has_fda) {
             printPass(w, label, "~/Library/Messages/chat.db");
-        } else if (!cld_has_fda and !imsg_has_fda) {
-            printWarn(w, label, "readable (via terminal), but cld and imsg lack Full Disk Access", "Add cld and imsg in System Settings > Privacy & Security > Full Disk Access");
-        } else if (!imsg_has_fda) {
-            printWarn(w, label, "readable (via terminal), but imsg lacks Full Disk Access", "Add imsg in System Settings > Privacy & Security > Full Disk Access");
         } else {
-            printWarn(w, label, "readable (via terminal), but cld lacks Full Disk Access", "Add cld in System Settings > Privacy & Security > Full Disk Access");
+            // Check if the stable binary even exists
+            if (std.fs.cwd().statFile(service_path)) |_| {
+                printWarn(w, label, "readable (via terminal), but service binary lacks FDA", "Add " ++ service_path ++ " in System Settings > Privacy & Security > Full Disk Access");
+            } else |_| {
+                printWarn(w, label, "readable (via terminal), but service binary not found", "Run: brew reinstall cld");
+            }
         }
     } else |_| {
-        printFail(w, label, "~/Library/Messages/chat.db (not readable)", "Grant Full Disk Access to cld and imsg in System Settings > Privacy & Security");
+        printFail(w, label, "~/Library/Messages/chat.db (not readable)", "Grant Full Disk Access in System Settings > Privacy & Security");
     }
 }
 
-/// Query the system TCC.db to check if a binary (resolved from PATH) has its own
-/// Full Disk Access grant. Returns false if the query fails or the binary is not found.
-fn checkTccFda(binary_name: []const u8) bool {
-    // Resolve the binary's real path (following symlinks)
-    var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const real_path = resolveBinaryPath(binary_name, &resolved_buf) orelse return false;
-
-    // Query TCC.db: auth_value=2 means "allowed"
+/// Query the system TCC.db to check if a specific path has a Full Disk Access grant.
+fn checkTccFdaPath(path: []const u8) bool {
     var query_buf: [1024]u8 = undefined;
-    const query = std.fmt.bufPrint(&query_buf, "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client='{s}' AND auth_value=2 LIMIT 1", .{real_path}) catch return false;
+    const query = std.fmt.bufPrint(&query_buf, "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client='{s}' AND auth_value=2 LIMIT 1", .{path}) catch return false;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -277,27 +272,7 @@ fn checkTccFda(binary_name: []const u8) bool {
     var result = ProcessPool.exec(allocator, &cmd) catch return false;
     defer result.deinit();
 
-    // If we got output with "2", the binary has FDA
     return result.exit_code == 0 and std.mem.indexOf(u8, result.stdout, "2") != null;
-}
-
-/// Find a binary on PATH and resolve symlinks to get the real absolute path.
-fn resolveBinaryPath(name: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
-    const path_env = std.posix.getenv("PATH") orelse return null;
-    var it = std.mem.splitScalar(u8, path_env, ':');
-    while (it.next()) |dir| {
-        if (dir.len == 0) continue;
-        var candidate_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (dir.len + 1 + name.len > candidate_buf.len) continue;
-        @memcpy(candidate_buf[0..dir.len], dir);
-        candidate_buf[dir.len] = '/';
-        @memcpy(candidate_buf[dir.len + 1 ..][0..name.len], name);
-        const candidate = candidate_buf[0 .. dir.len + 1 + name.len];
-
-        const resolved = std.fs.cwd().realpath(candidate, out) catch continue;
-        return resolved;
-    }
-    return null;
 }
 
 fn checkConfig(w: anytype, home: []const u8) void {
