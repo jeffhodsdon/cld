@@ -34,6 +34,15 @@ Follow the Zig zen principles when approaching how to write code, solve problems
 - Memory is a resource.
 - Together we serve the users.
 
+## Debugging Brew Service
+
+When debugging issues with `brew services`, always check `cld --version` to verify the installed binary matches the expected commit. The brew formula copies the binary to a stable path (`/opt/homebrew/var/cld/cld`) for FDA persistence — if the `post_install` fails silently, the service may run a stale binary.
+
+- `cld --version` — shows version + git hash (e.g. `cld 0.1.0-e60c3ef`)
+- `md5 /opt/homebrew/bin/cld /opt/homebrew/var/cld/cld` — compare CLI vs service binary
+- `tail /opt/homebrew/var/log/cld.err.log` — service error log
+- Build with hash: `zig build -Dgit-hash="$(git rev-parse --short HEAD)"`
+
 ## Zig Version
 
 Using Zig 0.15.2. Key API differences from older versions:
