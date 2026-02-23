@@ -298,23 +298,22 @@ fn checkMessagesDb(w: anytype, home: []const u8) void {
     if (std.fs.cwd().openFile(path, .{})) |file| {
         file.close();
         // File is readable — but this may be inherited from the terminal's FDA.
-        // The brew service runs from a stable path (/opt/homebrew/var/cld/cld)
-        // which is what needs FDA. Check that path in TCC.
-        const service_path = "/opt/homebrew/var/cld/cld";
-        const service_has_fda = checkTccFdaPath(service_path);
+        // Resolve our own binary path and check if it has an FDA grant in TCC.
+        var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const self_path = std.fs.selfExePath(&resolved_buf) catch null;
 
-        if (service_has_fda) {
-            printPass(w, label, "~/Library/Messages/chat.db");
-        } else {
-            // Check if the stable binary even exists
-            if (std.fs.cwd().statFile(service_path)) |_| {
-                printWarn(w, label, "readable (via terminal), but service binary lacks FDA", "Add " ++ service_path ++ " in System Settings > Privacy & Security > Full Disk Access");
-            } else |_| {
-                printWarn(w, label, "readable (via terminal), but service binary not found", "Run: brew reinstall cld");
+        if (self_path) |sp| {
+            if (checkTccFdaPath(sp)) {
+                printPass(w, label, "~/Library/Messages/chat.db");
+            } else {
+                printWarn(w, label, "readable (via terminal), but cld binary lacks FDA", "Add cld in System Settings > Privacy & Security > Full Disk Access");
             }
+        } else {
+            // Can't resolve self path, just report readable
+            printPass(w, label, "~/Library/Messages/chat.db");
         }
     } else |_| {
-        printFail(w, label, "~/Library/Messages/chat.db (not readable)", "Grant Full Disk Access in System Settings > Privacy & Security");
+        printFail(w, label, "~/Library/Messages/chat.db (not readable)", "Grant Full Disk Access to cld in System Settings > Privacy & Security");
     }
 }
 
