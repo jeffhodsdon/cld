@@ -120,7 +120,7 @@ fn deinitFn(ptr: *anyopaque) void {
 const Attachment = struct {
     filename: ?[]const u8 = null,
     mime_type: ?[]const u8 = null,
-    filepath: ?[]const u8 = null,
+    original_path: ?[]const u8 = null,
 };
 
 fn parseJsonMessage(allocator: std.mem.Allocator, line: []const u8) ?InboundMessage {
@@ -151,7 +151,7 @@ fn parseJsonMessage(allocator: std.mem.Allocator, line: []const u8) ?InboundMess
             var paths = allocator.alloc([]const u8, atts.len) catch return null;
             var count: usize = 0;
             for (atts) |att| {
-                if (att.filepath) |fp| {
+                if (att.original_path) |fp| {
                     paths[count] = fp;
                     count += 1;
                 }
@@ -340,7 +340,7 @@ test "parse message with attachments" {
     var arena = testAllocator();
     defer arena.deinit();
     const json =
-        \\{"id":1,"chat_id":1,"guid":"G4","sender":"+1","text":"check this out","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"photo.jpg","mime_type":"image/jpeg","filepath":"/Users/c/Library/Messages/Attachments/ab/photo.jpg"}]}
+        \\{"id":1,"chat_id":1,"guid":"G4","sender":"+1","text":"check this out","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"photo.jpg","mime_type":"image/jpeg","original_path":"/Users/c/Library/Messages/Attachments/ab/photo.jpg"}]}
     ;
     const m = parseJsonMessage(arena.allocator(), json) orelse
         return error.ExpectedMessage;
@@ -353,7 +353,7 @@ test "parse message with multiple attachments" {
     var arena = testAllocator();
     defer arena.deinit();
     const json =
-        \\{"id":1,"chat_id":1,"guid":"G5","sender":"+1","text":"","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"a.jpg","mime_type":"image/jpeg","filepath":"/tmp/a.jpg"},{"filename":"b.png","mime_type":"image/png","filepath":"/tmp/b.png"}]}
+        \\{"id":1,"chat_id":1,"guid":"G5","sender":"+1","text":"","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"a.jpg","mime_type":"image/jpeg","original_path":"/tmp/a.jpg"},{"filename":"b.png","mime_type":"image/png","original_path":"/tmp/b.png"}]}
     ;
     const m = parseJsonMessage(arena.allocator(), json) orelse
         return error.ExpectedMessage;
@@ -367,7 +367,7 @@ test "parse attachment with null filepath is skipped" {
     var arena = testAllocator();
     defer arena.deinit();
     const json =
-        \\{"id":1,"chat_id":1,"guid":"G6","sender":"+1","text":"","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"a.jpg","mime_type":"image/jpeg","filepath":null},{"filename":"b.png","mime_type":"image/png","filepath":"/tmp/b.png"}]}
+        \\{"id":1,"chat_id":1,"guid":"G6","sender":"+1","text":"","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"a.jpg","mime_type":"image/jpeg","original_path":null},{"filename":"b.png","mime_type":"image/png","original_path":"/tmp/b.png"}]}
     ;
     const m = parseJsonMessage(arena.allocator(), json) orelse
         return error.ExpectedMessage;
