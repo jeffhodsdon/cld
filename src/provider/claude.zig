@@ -31,16 +31,20 @@ conversation_uuids: std.StringHashMap([]const u8),
 /// FIFO message queue — processed one at a time per conversation.
 queue: std.ArrayListUnmanaged(QueuedMessage),
 next_handle: u64,
+sessions_path: ?[]const u8,
 
-pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool) Claude {
-    return .{
+pub fn init(allocator: std.mem.Allocator, pool: *ProcessPool, sessions_path: ?[]const u8) Claude {
+    var self = Claude{
         .allocator = allocator,
         .pool = pool,
         .sessions = std.AutoHashMap(Handle, SessionInfo).init(allocator),
         .conversation_uuids = std.StringHashMap([]const u8).init(allocator),
         .queue = .empty,
         .next_handle = 0,
+        .sessions_path = sessions_path,
     };
+    self.loadSessionUuids();
+    return self;
 }
 
 pub fn deinit(self: *Claude) void {
@@ -68,6 +72,69 @@ pub fn deinit(self: *Claude) void {
         self.allocator.free(entry.value_ptr.*);
     }
     self.conversation_uuids.deinit();
+}
+
+fn loadSessionUuids(self: *Claude) void {
+    const path = self.sessions_path orelse return;
+    const file = std.fs.cwd().openFile(path, .{}) catch return;
+    defer file.close();
+    const data = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return;
+    defer self.allocator.free(data);
+
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        self.allocator,
+        data,
+        .{},
+    ) catch return;
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return,
+    };
+    var it = obj.iterator();
+    while (it.next()) |entry| {
+        const val_str = switch (entry.value_ptr.*) {
+            .string => |s| s,
+            else => continue,
+        };
+        const key = self.allocator.dupe(u8, entry.key_ptr.*) catch continue;
+        const val = self.allocator.dupe(u8, val_str) catch {
+            self.allocator.free(key);
+            continue;
+        };
+        self.conversation_uuids.put(key, val) catch {
+            self.allocator.free(key);
+            self.allocator.free(val);
+            continue;
+        };
+    }
+    std.log.info("loaded {d} session(s) from disk", .{self.conversation_uuids.count()});
+}
+
+fn saveSessionUuids(self: *Claude) void {
+    const path = self.sessions_path orelse return;
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(self.allocator);
+    buf.append(self.allocator, '{') catch return;
+    var first = true;
+    var it = self.conversation_uuids.iterator();
+    while (it.next()) |entry| {
+        if (!first) buf.append(self.allocator, ',') catch return;
+        first = false;
+        buf.append(self.allocator, '"') catch return;
+        buf.appendSlice(self.allocator, entry.key_ptr.*) catch return;
+        buf.appendSlice(self.allocator, "\":\"") catch return;
+        buf.appendSlice(self.allocator, entry.value_ptr.*) catch return;
+        buf.append(self.allocator, '"') catch return;
+    }
+    buf.appendSlice(self.allocator, "}\n") catch return;
+
+    const file = std.fs.cwd().createFile(path, .{}) catch return;
+    defer file.close();
+    file.writeAll(buf.items) catch return;
 }
 
 pub fn provider(self: *Claude) Provider {
@@ -195,6 +262,7 @@ fn processQueue(self: *Claude) void {
                 self.freeQueued(q);
                 continue;
             };
+            self.saveSessionUuids();
             break :blk uuid_str;
         };
 
@@ -253,6 +321,14 @@ fn pollFn(ptr: *anyopaque, handle: Handle) ?Response {
                 std.log.err("claude stderr: {s}", .{stderr});
             }
             std.log.err("claude exited with code {d}", .{exit_code});
+
+            // Remove stale session UUID so next message starts a fresh session
+            if (self.conversation_uuids.fetchRemove(session.conversation_id)) |kv| {
+                self.allocator.free(kv.key);
+                self.allocator.free(kv.value);
+                self.saveSessionUuids();
+                std.log.info("cleared stale session for [{s}]", .{session.conversation_id});
+            }
         }
 
         // Drain remaining stdout
@@ -438,7 +514,7 @@ test "parseClaudeResponse trims whitespace" {
 test "message queued when conversation has active session" {
     var pool = ProcessPool.init(testing.allocator);
     defer pool.deinit();
-    var claude = Claude.init(testing.allocator, &pool);
+    var claude = Claude.init(testing.allocator, &pool, null);
     defer claude.deinit();
 
     // Spawn a real process to act as the active session
@@ -471,7 +547,7 @@ test "message queued when conversation has active session" {
 test "multiple messages queued in order" {
     var pool = ProcessPool.init(testing.allocator);
     defer pool.deinit();
-    var claude = Claude.init(testing.allocator, &pool);
+    var claude = Claude.init(testing.allocator, &pool, null);
     defer claude.deinit();
 
     // Spawn a real process as active session
@@ -508,7 +584,7 @@ test "multiple messages queued in order" {
 test "hasActiveSession" {
     var pool = ProcessPool.init(testing.allocator);
     defer pool.deinit();
-    var claude = Claude.init(testing.allocator, &pool);
+    var claude = Claude.init(testing.allocator, &pool, null);
     defer claude.deinit();
 
     try testing.expect(!claude.hasActiveSession("conv-1"));
@@ -533,7 +609,7 @@ test "hasActiveSession" {
 test "different conversations not blocked by each other" {
     var pool = ProcessPool.init(testing.allocator);
     defer pool.deinit();
-    var claude = Claude.init(testing.allocator, &pool);
+    var claude = Claude.init(testing.allocator, &pool, null);
     defer claude.deinit();
 
     // Active session for conv-1
@@ -569,4 +645,73 @@ test "different conversations not blocked by each other" {
     // conv-1 message still queued
     try testing.expectEqual(@as(usize, 1), claude.queue.items.len);
     try testing.expectEqualStrings("conv-1", claude.queue.items[0].conversation_id);
+}
+
+test "save and load session UUIDs round-trip" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = tmp.dir.realpathAlloc(testing.allocator, ".") catch unreachable;
+    defer testing.allocator.free(tmp_path);
+    const path = std.fs.path.join(testing.allocator, &.{ tmp_path, "sessions.json" }) catch unreachable;
+    defer testing.allocator.free(path);
+
+    // Write sessions with first instance
+    {
+        var pool = ProcessPool.init(testing.allocator);
+        defer pool.deinit();
+        var claude = Claude.init(testing.allocator, &pool, path);
+        defer claude.deinit();
+
+        const k1 = try testing.allocator.dupe(u8, "imessage:+1234567890");
+        const v1 = try testing.allocator.dupe(u8, "uuid-aaa");
+        try claude.conversation_uuids.put(k1, v1);
+
+        const k2 = try testing.allocator.dupe(u8, "imessage:+0987654321");
+        const v2 = try testing.allocator.dupe(u8, "uuid-bbb");
+        try claude.conversation_uuids.put(k2, v2);
+
+        claude.saveSessionUuids();
+    }
+
+    // Load with a new instance
+    {
+        var pool = ProcessPool.init(testing.allocator);
+        defer pool.deinit();
+        var claude = Claude.init(testing.allocator, &pool, path);
+        defer claude.deinit();
+
+        try testing.expectEqual(@as(u32, 2), claude.conversation_uuids.count());
+        try testing.expectEqualStrings("uuid-aaa", claude.conversation_uuids.get("imessage:+1234567890").?);
+        try testing.expectEqualStrings("uuid-bbb", claude.conversation_uuids.get("imessage:+0987654321").?);
+    }
+}
+
+test "load gracefully handles missing file" {
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool, "/tmp/cld-test-nonexistent-sessions.json");
+    defer claude.deinit();
+
+    try testing.expectEqual(@as(u32, 0), claude.conversation_uuids.count());
+}
+
+test "load gracefully handles corrupt file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = tmp.dir.realpathAlloc(testing.allocator, ".") catch unreachable;
+    defer testing.allocator.free(tmp_path);
+    const path = std.fs.path.join(testing.allocator, &.{ tmp_path, "sessions.json" }) catch unreachable;
+    defer testing.allocator.free(path);
+
+    // Write garbage
+    const file = try std.fs.cwd().createFile(path, .{});
+    try file.writeAll("not valid json{{{");
+    file.close();
+
+    var pool = ProcessPool.init(testing.allocator);
+    defer pool.deinit();
+    var claude = Claude.init(testing.allocator, &pool, path);
+    defer claude.deinit();
+
+    try testing.expectEqual(@as(u32, 0), claude.conversation_uuids.count());
 }

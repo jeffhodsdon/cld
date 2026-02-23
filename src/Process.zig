@@ -21,6 +21,7 @@ pub fn spawn(allocator: std.mem.Allocator, cmd: *Cmd, opts: SpawnOptions) !Proce
     var env_map = try cmd.buildEnvMap(allocator);
 
     var child = std.process.Child.init(cmd.argv.items, allocator);
+    child.stdin_behavior = .Close;
     child.stdout_behavior = switch (opts.stdout) {
         .pipe => .Pipe,
         .ignore => .Ignore,
@@ -74,6 +75,18 @@ pub fn stdoutFd(self: *const Process) ?posix.fd_t {
 pub fn stderrFd(self: *const Process) ?posix.fd_t {
     const stderr = self.child.stderr orelse return null;
     return stderr.handle;
+}
+
+/// Read available pipe data into internal buffers without extracting lines.
+/// Call this on stdout_ready/stderr_ready events to prevent pipe buffer from
+/// filling up and blocking the child process.
+pub fn drainPipe(self: *Process) void {
+    if (self.stdoutFd()) |fd| {
+        readAvailable(fd, &self.stdout_buf, self.allocator) catch {};
+    }
+    if (self.stderrFd()) |fd| {
+        readAvailable(fd, &self.stderr_buf, self.allocator) catch {};
+    }
 }
 
 /// Read available data from stdout and return completed lines.
@@ -137,7 +150,8 @@ pub fn kill(self: *Process) void {
 
 pub fn deinit(self: *Process) void {
     if (self.exit_status == null) {
-        self.kill();
+        // SIGKILL for immediate exit — process is being destroyed
+        posix.kill(self.child.id, posix.SIG.KILL) catch {};
         _ = self.child.wait() catch {};
     }
 

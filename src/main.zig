@@ -116,19 +116,20 @@ pub fn main() !void {
     var memory = Memory.init(allocator, memory_path);
     defer memory.deinit();
 
-    const mem_ctx = memory.getContext() catch "";
-    defer if (mem_ctx.len > 0) allocator.free(mem_ctx);
-
-    const system_prompt = if (mem_ctx.len > 0)
-        std.fmt.allocPrint(allocator, "{s}\n\n{s}", .{ prompts.system, mem_ctx }) catch prompts.system
-    else
-        prompts.system;
-    defer if (system_prompt.ptr != prompts.system.ptr) allocator.free(system_prompt);
+    // Resolve sessions path: ~/.local/share/cld/sessions.json
+    const sessions_path = resolveSessions: {
+        const home = std.posix.getenv("HOME") orelse break :resolveSessions null;
+        const dir = std.fs.path.join(allocator, &.{ home, ".local", "share", "cld" }) catch break :resolveSessions null;
+        defer allocator.free(dir);
+        std.fs.cwd().makePath(dir) catch {};
+        break :resolveSessions std.fs.path.join(allocator, &.{ home, ".local", "share", "cld", "sessions.json" }) catch null;
+    };
+    defer if (sessions_path) |p| allocator.free(p);
 
     var imsg = try IMessage.init(allocator, &pool);
     defer imsg.deinit();
 
-    var claude = Claude.init(allocator, &pool);
+    var claude = Claude.init(allocator, &pool, sessions_path);
     defer claude.deinit();
 
     // Event-driven main loop
@@ -147,13 +148,20 @@ pub fn main() !void {
                             }
                             std.log.info("recv [{s}] {s}", .{ inbound.sender, inbound.text });
                             memory.logMessage("recv", inbound.sender, inbound.text);
+
+                            // Build system prompt fresh each message (picks up file changes via stat check)
+                            const mem_ctx = memory.getContext() catch "";
+                            defer if (mem_ctx.len > 0) allocator.free(mem_ctx);
+                            const sys_prompt = prompts.buildSystemPrompt(allocator, mem_ctx) catch prompts.system;
+                            defer if (sys_prompt.ptr != prompts.system.ptr) allocator.free(sys_prompt);
+
                             _ = claude.provider().start(.{
                                 .conversation_id = inbound.channel_id,
                                 .messages = &.{.{
                                     .role = .user,
                                     .content = inbound.text,
                                 }},
-                                .system_prompt = system_prompt,
+                                .system_prompt = sys_prompt,
                             });
                         }
                     },
@@ -210,7 +218,12 @@ pub fn main() !void {
                             claude.provider().cancel(handle);
                         }
                     },
-                    .stdout_ready, .stderr_ready => {},
+                    .stdout_ready, .stderr_ready => {
+                        // Drain pipe to prevent buffer filling up and blocking the child
+                        if (pool.get(event.id)) |proc| {
+                            proc.drainPipe();
+                        }
+                    },
                 }
             }
         }

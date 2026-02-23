@@ -11,18 +11,37 @@ user_profile: ?[]const u8,
 tools: ?[]const u8,
 agents: ?[]const u8,
 long_term: ?[]const u8,
+identity_mtime: i128 = 0,
+soul_mtime: i128 = 0,
+user_profile_mtime: i128 = 0,
+tools_mtime: i128 = 0,
+agents_mtime: i128 = 0,
+long_term_mtime: i128 = 0,
 tinys: std.StringHashMap([]const u8),
 
 pub fn init(allocator: std.mem.Allocator, root_path: []const u8) Memory {
+    const id = loadFileWithMtime(allocator, root_path, "IDENTITY.md");
+    const soul = loadFileWithMtime(allocator, root_path, "SOUL.md");
+    const user = loadFileWithMtime(allocator, root_path, "USER.md");
+    const tools = loadFileWithMtime(allocator, root_path, "TOOLS.md");
+    const agents = loadFileWithMtime(allocator, root_path, "AGENTS.md");
+    const lt = loadFileWithMtime(allocator, root_path, "MEMORY.md");
+
     var self: Memory = .{
         .allocator = allocator,
         .root_path = root_path,
-        .identity = readFileAlloc(allocator, root_path, "IDENTITY.md") catch null,
-        .soul = readFileAlloc(allocator, root_path, "SOUL.md") catch null,
-        .user_profile = readFileAlloc(allocator, root_path, "USER.md") catch null,
-        .tools = readFileAlloc(allocator, root_path, "TOOLS.md") catch null,
-        .agents = readFileAlloc(allocator, root_path, "AGENTS.md") catch null,
-        .long_term = readFileAlloc(allocator, root_path, "MEMORY.md") catch null,
+        .identity = id.content,
+        .identity_mtime = id.mtime,
+        .soul = soul.content,
+        .soul_mtime = soul.mtime,
+        .user_profile = user.content,
+        .user_profile_mtime = user.mtime,
+        .tools = tools.content,
+        .tools_mtime = tools.mtime,
+        .agents = agents.content,
+        .agents_mtime = agents.mtime,
+        .long_term = lt.content,
+        .long_term_mtime = lt.mtime,
         .tinys = std.StringHashMap([]const u8).init(allocator),
     };
 
@@ -47,24 +66,65 @@ pub fn deinit(self: *Memory) void {
     self.tinys.deinit();
 }
 
+/// Stat-check mutable files and reload any that have changed on disk.
+pub fn refresh(self: *Memory) void {
+    const entries = .{
+        .{ "IDENTITY.md", "identity", "identity_mtime" },
+        .{ "SOUL.md", "soul", "soul_mtime" },
+        .{ "USER.md", "user_profile", "user_profile_mtime" },
+        .{ "TOOLS.md", "tools", "tools_mtime" },
+        .{ "AGENTS.md", "agents", "agents_mtime" },
+        .{ "MEMORY.md", "long_term", "long_term_mtime" },
+    };
+    inline for (entries) |e| {
+        self.refreshSlot(e[0], &@field(self, e[1]), &@field(self, e[2]));
+    }
+}
+
+fn refreshSlot(self: *Memory, name: []const u8, content: *?[]const u8, cached_mtime: *i128) void {
+    const path = std.fs.path.join(self.allocator, &.{ self.root_path, name }) catch return;
+    defer self.allocator.free(path);
+
+    const file = std.fs.cwd().openFile(path, .{}) catch {
+        // File removed or inaccessible — clear if we had content
+        if (content.*) |old| {
+            self.allocator.free(old);
+            content.* = null;
+            cached_mtime.* = 0;
+        }
+        return;
+    };
+    defer file.close();
+
+    const stat = file.stat() catch return;
+    if (stat.mtime == cached_mtime.*) return;
+
+    const new_content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return;
+    if (content.*) |old| self.allocator.free(old);
+    content.* = new_content;
+    cached_mtime.* = stat.mtime;
+}
+
 /// Build context string for provider prompt injection.
-/// Concatenates identity files + long-term memory + sorted daily summaries.
+/// Stat-checks files for changes, then concatenates identity files + long-term memory + sorted daily summaries.
 pub fn getContext(self: *Memory) ![]const u8 {
+    self.refresh();
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(self.allocator);
 
-    const sections = [_]struct { header: []const u8, content: ?[]const u8 }{
-        .{ .header = "## Identity\n", .content = self.identity },
-        .{ .header = "## Soul\n", .content = self.soul },
-        .{ .header = "## User Profile\n", .content = self.user_profile },
-        .{ .header = "## Tools\n", .content = self.tools },
-        .{ .header = "## Agents\n", .content = self.agents },
-        .{ .header = "## Long-term Memory\n", .content = self.long_term },
+    const sections = [_]struct { header: []const u8, descriptor: []const u8, content: ?[]const u8 }{
+        .{ .header = "## Identity\n", .descriptor = "This is who you are — your name, role, and purpose.\n", .content = self.identity },
+        .{ .header = "## Soul\n", .descriptor = "Embody this personality and tone naturally in every response. Don't narrate it, just be it.\n", .content = self.soul },
+        .{ .header = "## User Profile\n", .descriptor = "Facts about the person you're talking to. Use to personalize responses.\n", .content = self.user_profile },
+        .{ .header = "## Tools\n", .descriptor = "Capabilities available to you.\n", .content = self.tools },
+        .{ .header = "## Agents\n", .descriptor = "Other agents you can coordinate with.\n", .content = self.agents },
+        .{ .header = "## Long-term Memory\n", .descriptor = "Persistent notes and facts. Reference when relevant.\n", .content = self.long_term },
     };
 
     for (sections) |s| {
         if (s.content) |content| {
             try buf.appendSlice(self.allocator, s.header);
+            try buf.appendSlice(self.allocator, s.descriptor);
             try buf.appendSlice(self.allocator, content);
             try buf.appendSlice(self.allocator, "\n\n");
         }
@@ -184,6 +244,19 @@ fn loadRecentTinys(self: *Memory, days: u32) !void {
     }
 }
 
+fn loadFileWithMtime(allocator: std.mem.Allocator, root: []const u8, name: []const u8) struct { content: ?[]const u8, mtime: i128 } {
+    const path = std.fs.path.join(allocator, &.{ root, name }) catch return .{ .content = null, .mtime = 0 };
+    defer allocator.free(path);
+
+    const file = std.fs.cwd().openFile(path, .{}) catch return .{ .content = null, .mtime = 0 };
+    defer file.close();
+
+    const stat = file.stat() catch return .{ .content = null, .mtime = 0 };
+    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch return .{ .content = null, .mtime = 0 };
+
+    return .{ .content = content, .mtime = stat.mtime };
+}
+
 fn readFileAlloc(allocator: std.mem.Allocator, root: []const u8, name: []const u8) ![]const u8 {
     const path = try std.fs.path.join(allocator, &.{ root, name });
     defer allocator.free(path);
@@ -250,7 +323,9 @@ test "getContext with identity and long-term" {
     try testing.expect(std.mem.indexOf(u8, ctx, "I am cld") != null);
     try testing.expect(std.mem.indexOf(u8, ctx, "Remember this") != null);
     try testing.expect(std.mem.indexOf(u8, ctx, "## Identity\n") != null);
+    try testing.expect(std.mem.indexOf(u8, ctx, "This is who you are") != null);
     try testing.expect(std.mem.indexOf(u8, ctx, "## Long-term Memory\n") != null);
+    try testing.expect(std.mem.indexOf(u8, ctx, "Persistent notes and facts") != null);
 }
 
 test "getContext tinys sorted by date" {
@@ -263,6 +338,12 @@ test "getContext tinys sorted by date" {
         .tools = null,
         .agents = null,
         .long_term = null,
+        .identity_mtime = 0,
+        .soul_mtime = 0,
+        .user_profile_mtime = 0,
+        .tools_mtime = 0,
+        .agents_mtime = 0,
+        .long_term_mtime = 0,
         .tinys = std.StringHashMap([]const u8).init(testing.allocator),
     };
     defer mem.deinit();
@@ -352,6 +433,38 @@ test "parseClaudeResult malformed JSON" {
     try testing.expect(parseClaudeResult(testing.allocator, "not json") == null);
     try testing.expect(parseClaudeResult(testing.allocator, "") == null);
     try testing.expect(parseClaudeResult(testing.allocator, "{}") == null);
+}
+
+test "refresh picks up new and changed files" {
+    const tmp_path = "/tmp/cld-test-refresh";
+    std.fs.cwd().deleteTree(tmp_path) catch {};
+    try std.fs.cwd().makePath(tmp_path);
+    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+
+    // Init with no files
+    var mem = Memory.init(testing.allocator, tmp_path);
+    defer mem.deinit();
+    try testing.expect(mem.identity == null);
+
+    // Create IDENTITY.md — refresh should pick it up
+    try writeTestFile(tmp_path, "IDENTITY.md", "I am new");
+    mem.refresh();
+    try testing.expect(mem.identity != null);
+    try testing.expectEqualStrings("I am new", mem.identity.?);
+
+    // Overwrite with different content — need mtime to advance
+    // Sleep 10ms to ensure mtime changes (filesystem granularity)
+    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try writeTestFile(tmp_path, "IDENTITY.md", "I am updated");
+    mem.refresh();
+    try testing.expectEqualStrings("I am updated", mem.identity.?);
+
+    // Delete the file — refresh should clear it
+    const id_path = try std.fs.path.join(testing.allocator, &.{ tmp_path, "IDENTITY.md" });
+    defer testing.allocator.free(id_path);
+    try std.fs.cwd().deleteFile(id_path);
+    mem.refresh();
+    try testing.expect(mem.identity == null);
 }
 
 fn writeTestFile(dir: []const u8, name: []const u8, data: []const u8) !void {

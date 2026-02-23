@@ -93,6 +93,21 @@ pub fn build(b: *std.Build) void {
     addTestTarget(b, test_step, "uuid", b.path("src/Uuid.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "memory", b.path("src/memory.zig"), target, optimize, &.{});
 
+    // prompts -> embedded files
+    {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("src/prompts.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
+        mod.addAnonymousImport("summarize_prompt", .{ .root_source_file = b.path("prompts/summarize.md") });
+        const unit_test = b.addTest(.{ .root_module = mod });
+        const run = b.addRunArtifact(unit_test);
+        test_step.dependOn(&run.step);
+        b.step("test-prompts", "Run prompts tests").dependOn(&run.step);
+    }
+
     // Process -> Cmd
     addTestTarget(b, test_step, "process", b.path("src/Process.zig"), target, optimize, &.{
         .{ .name = "Cmd", .module = cmd_mod },
