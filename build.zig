@@ -57,6 +57,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("memory", memory_mod);
     exe_mod.addImport("prompts", prompts_mod);
     exe_mod.addImport("ProcessPool", pool_mod);
+    exe_mod.addImport("Cmd", cmd_mod);
     exe_mod.addImport("message", message_mod);
 
     const exe = b.addExecutable(.{
