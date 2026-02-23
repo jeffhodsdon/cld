@@ -29,6 +29,9 @@ pub fn spawn(allocator: std.mem.Allocator, cmd: *Cmd, opts: SpawnOptions) !Proce
         .pipe => .Pipe,
         .ignore => .Ignore,
     };
+    // Put child in its own process group so terminal SIGINT
+    // only goes to cld, not to child processes.
+    child.pgid = 0;
     if (cmd.cwd) |cwd| {
         child.cwd = cwd;
     }
