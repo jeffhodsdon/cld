@@ -160,6 +160,7 @@ pub fn main() !void {
                                 .messages = &.{.{
                                     .role = .user,
                                     .content = inbound.text,
+                                    .attachments = inbound.attachments,
                                 }},
                                 .system_prompt = sys_prompt,
                             });

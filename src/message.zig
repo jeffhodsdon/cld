@@ -5,6 +5,7 @@ pub const InboundMessage = struct {
     text: []const u8,
     timestamp: i64,
     reply_to: ?[]const u8 = null,
+    attachments: []const []const u8 = &.{},
 };
 
 pub const OutboundMessage = struct {
@@ -17,6 +18,7 @@ pub const Message = struct {
     role: Role,
     content: []const u8,
     timestamp: i64 = 0,
+    attachments: []const []const u8 = &.{},
 
     pub const Role = enum {
         user,

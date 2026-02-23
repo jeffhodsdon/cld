@@ -164,6 +164,11 @@ fn buildPrompt(allocator: std.mem.Allocator, messages: []const msg.Message) ![]c
     for (messages) |m| {
         try buf.appendSlice(allocator, m.content);
         try buf.appendSlice(allocator, "\n");
+        for (m.attachments) |path| {
+            try buf.appendSlice(allocator, "[Attachment: ");
+            try buf.appendSlice(allocator, path);
+            try buf.appendSlice(allocator, "]\n");
+        }
     }
     return buf.toOwnedSlice(allocator);
 }
@@ -410,6 +415,39 @@ test "buildPrompt single message" {
     defer testing.allocator.free(prompt);
 
     try testing.expectEqualStrings("test\n", prompt);
+}
+
+test "buildPrompt with attachments" {
+    const paths = &[_][]const u8{"/tmp/photo.jpg"};
+    const messages = &[_]msg.Message{
+        .{ .role = .user, .content = "check this", .attachments = paths },
+    };
+    const prompt = try buildPrompt(testing.allocator, messages);
+    defer testing.allocator.free(prompt);
+
+    try testing.expectEqualStrings("check this\n[Attachment: /tmp/photo.jpg]\n", prompt);
+}
+
+test "buildPrompt with multiple attachments" {
+    const paths = &[_][]const u8{ "/tmp/a.jpg", "/tmp/b.png" };
+    const messages = &[_]msg.Message{
+        .{ .role = .user, .content = "photos", .attachments = paths },
+    };
+    const prompt = try buildPrompt(testing.allocator, messages);
+    defer testing.allocator.free(prompt);
+
+    try testing.expectEqualStrings("photos\n[Attachment: /tmp/a.jpg]\n[Attachment: /tmp/b.png]\n", prompt);
+}
+
+test "buildPrompt no attachments unchanged" {
+    const messages = &[_]msg.Message{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "hi" },
+    };
+    const prompt = try buildPrompt(testing.allocator, messages);
+    defer testing.allocator.free(prompt);
+
+    try testing.expectEqualStrings("hello\nhi\n", prompt);
 }
 
 test "buildCmd new session (no resume)" {
