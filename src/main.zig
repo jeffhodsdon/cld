@@ -54,8 +54,18 @@ pub fn main() !void {
     var pool = ProcessPool.init(allocator);
     defer pool.deinit();
 
+    // Resolve memory path: config override or ~/.local/share/cld/memory
+    const resolved_memory_path = config.memory_path orelse resolvePath: {
+        const home = std.posix.getenv("HOME") orelse break :resolvePath null;
+        break :resolvePath std.fs.path.join(allocator, &.{ home, ".local", "share", "cld", "memory" }) catch null;
+    };
+    defer if (config.memory_path == null) {
+        if (resolved_memory_path) |p| allocator.free(p);
+    };
+    const memory_path = resolved_memory_path orelse "memory";
+
     // Init components
-    var memory = Memory.init(allocator, config.memory_path);
+    var memory = Memory.init(allocator, memory_path);
     defer memory.deinit();
 
     const mem_ctx = memory.getContext() catch "";
@@ -317,7 +327,7 @@ fn checkConfig(w: anytype, home: []const u8) void {
 fn checkMemoryDir(w: anytype, home: []const u8) void {
     const label = "memory dir";
 
-    // Load config to get memory_path (same as main does)
+    // Load config to get memory_path
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -325,29 +335,20 @@ fn checkMemoryDir(w: anytype, home: []const u8) void {
     var config = Config.load(allocator);
     defer config.deinit();
 
-    const mem_path = config.memory_path;
-
-    // Resolve display path and actual path
-    const is_absolute = mem_path.len > 0 and mem_path[0] == '/';
-    const is_home_relative = std.mem.startsWith(u8, mem_path, "~/");
-
-    if (is_absolute) {
+    // Resolve default: ~/.local/share/cld/memory
+    if (config.memory_path) |mem_path| {
         checkDirAccess(w, label, mem_path, mem_path);
-    } else if (is_home_relative) {
+    } else {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const rest = mem_path[2..]; // skip ~/
-        if (home.len + 1 + rest.len > buf.len) {
-            printFail(w, label, "path too long", "");
+        const suffix = "/.local/share/cld/memory";
+        if (home.len == 0 or home.len + suffix.len > buf.len) {
+            printFail(w, label, "~/.local/share/cld/memory", "mkdir -p ~/.local/share/cld/memory");
             return;
         }
         @memcpy(buf[0..home.len], home);
-        buf[home.len] = '/';
-        @memcpy(buf[home.len + 1 ..][0..rest.len], rest);
-        const full = buf[0 .. home.len + 1 + rest.len];
-        checkDirAccess(w, label, mem_path, full);
-    } else {
-        // Relative path — resolve from cwd
-        checkDirAccess(w, label, mem_path, mem_path);
+        @memcpy(buf[home.len..][0..suffix.len], suffix);
+        const path = buf[0 .. home.len + suffix.len];
+        checkDirAccess(w, label, "~/.local/share/cld/memory", path);
     }
 }
 

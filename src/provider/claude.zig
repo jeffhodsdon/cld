@@ -93,10 +93,9 @@ fn buildCmd(allocator: std.mem.Allocator, prompt: []const u8, session_uuid: []co
     if (system_prompt.len > 0) {
         try cmd.option("--system-prompt", system_prompt);
     }
+    try cmd.option("--session-id", session_uuid);
     if (is_resume) {
-        try cmd.option("--resume", session_uuid);
-    } else {
-        try cmd.option("--session-id", session_uuid);
+        try cmd.arg("--resume");
     }
     try cmd.arg("--dangerously-skip-permissions");
     try cmd.envRemove("CLAUDECODE");
@@ -265,15 +264,16 @@ test "buildCmd resumed session" {
     defer cmd.deinit();
 
     const argv = cmd.argv.items;
-    try testing.expectEqual(8, argv.len);
+    try testing.expectEqual(9, argv.len);
     try testing.expectEqualStrings("claude", argv[0]);
     try testing.expectEqualStrings("-p", argv[1]);
     try testing.expectEqualStrings("follow up", argv[2]);
     try testing.expectEqualStrings("--output-format", argv[3]);
     try testing.expectEqualStrings("json", argv[4]);
-    try testing.expectEqualStrings("--resume", argv[5]);
+    try testing.expectEqualStrings("--session-id", argv[5]);
     try testing.expectEqualStrings("abc-123", argv[6]);
-    try testing.expectEqualStrings("--dangerously-skip-permissions", argv[7]);
+    try testing.expectEqualStrings("--resume", argv[7]);
+    try testing.expectEqualStrings("--dangerously-skip-permissions", argv[8]);
 }
 
 test "buildCmd with system prompt" {

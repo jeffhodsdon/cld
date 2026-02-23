@@ -14,11 +14,11 @@ pub const AdaptersConfig = struct {
 /// JSON-parseable schema (no runtime-only fields).
 const Schema = struct {
     adapters: AdaptersConfig = .{},
-    memory_path: []const u8 = "memory",
+    memory_path: ?[]const u8 = null,
 };
 
 adapters: AdaptersConfig = .{},
-memory_path: []const u8 = "memory",
+memory_path: ?[]const u8 = null,
 
 /// Arena backing parsed string slices. Null when using defaults.
 arena: ?*std.heap.ArenaAllocator = null,
@@ -89,7 +89,7 @@ test "parse full config" {
     try std.testing.expectEqual(2, cfg.adapters.imessage.allowed_senders.len);
     try std.testing.expectEqualStrings("+12125551234", cfg.adapters.imessage.allowed_senders[0]);
     try std.testing.expectEqualStrings("+14155559876", cfg.adapters.imessage.allowed_senders[1]);
-    try std.testing.expectEqualStrings("/tmp/cld-memory", cfg.memory_path);
+    try std.testing.expectEqualStrings("/tmp/cld-memory", cfg.memory_path.?);
 }
 
 test "parse empty JSON uses defaults" {
@@ -98,7 +98,7 @@ test "parse empty JSON uses defaults" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(0, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("memory", cfg.memory_path);
+    try std.testing.expect(cfg.memory_path == null);
 }
 
 test "parse partial config — adapters only" {
@@ -116,7 +116,7 @@ test "parse partial config — adapters only" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(1, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("memory", cfg.memory_path);
+    try std.testing.expect(cfg.memory_path == null);
 }
 
 test "isSenderAllowed with allowlist" {
@@ -155,6 +155,6 @@ test "load missing file returns defaults" {
     defer config.deinit();
 
     try std.testing.expectEqual(0, config.adapters.imessage.allowed_senders.len);
-    try std.testing.expectEqualStrings("memory", config.memory_path);
+    try std.testing.expect(config.memory_path == null);
     try std.testing.expect(config.arena == null);
 }
