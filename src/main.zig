@@ -8,6 +8,7 @@ const prompts = @import("prompts");
 const ProcessPool = @import("ProcessPool");
 const Cmd = @import("Cmd");
 const Handle = @import("message").Handle;
+const build_options = @import("build_options");
 
 const version = "0.1.0";
 
@@ -21,7 +22,7 @@ pub fn main() !void {
     if (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             const stdout = std.fs.File.stdout().deprecatedWriter();
-            stdout.print("cld {s}\n", .{version}) catch {};
+            stdout.print("cld {s}-{s}\n", .{ version, build_options.git_hash }) catch {};
             return;
         }
         if (std.mem.eql(u8, arg, "status")) {

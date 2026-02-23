@@ -45,12 +45,19 @@ pub fn build(b: *std.Build) void {
 
     // ── Executable ─────────────────────────────────────────────────────
 
+    // Inject git commit hash at compile time
+    const git_hash = b.option([]const u8, "git-hash", "Git commit hash") orelse "dev";
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "git_hash", git_hash);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    exe_mod.addOptions("build_options", build_options);
     exe_mod.addImport("Config", config_mod);
     exe_mod.addImport("imessage", imessage_mod);
     exe_mod.addImport("claude", claude_mod);
