@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     // ── Library modules (no dependencies) ──────────────────────────────
 
     const message_mod = b.createModule(.{ .root_source_file = b.path("src/message.zig") });
-    const cmd_mod = b.createModule(.{ .root_source_file = b.path("src/Cmd.zig") });
+    const cmd_mod = b.createModule(.{ .root_source_file = b.path("src/proc/Cmd.zig") });
     const memory_mod = b.createModule(.{ .root_source_file = b.path("src/memory.zig") });
     const uuid_mod = b.createModule(.{ .root_source_file = b.path("src/Uuid.zig") });
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/Config.zig") });
@@ -15,12 +15,16 @@ pub fn build(b: *std.Build) void {
     prompts_mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
     prompts_mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
 
+    // ── External dependencies ───────────────────────────────────────────
+
+    const cron_mod = b.dependency("cron", .{}).module("cron");
+
     // ── Library modules (with dependencies) ────────────────────────────
 
-    const process_mod = b.createModule(.{ .root_source_file = b.path("src/Process.zig") });
+    const process_mod = b.createModule(.{ .root_source_file = b.path("src/proc/Process.zig") });
     process_mod.addImport("Cmd", cmd_mod);
 
-    const pool_mod = b.createModule(.{ .root_source_file = b.path("src/ProcessPool.zig") });
+    const pool_mod = b.createModule(.{ .root_source_file = b.path("src/proc/ProcessPool.zig") });
     pool_mod.addImport("Cmd", cmd_mod);
     pool_mod.addImport("Process", process_mod);
 
@@ -42,6 +46,21 @@ pub fn build(b: *std.Build) void {
     claude_mod.addImport("Cmd", cmd_mod);
     claude_mod.addImport("ProcessPool", pool_mod);
     claude_mod.addImport("Uuid", uuid_mod);
+    claude_mod.addImport("memory", memory_mod);
+    claude_mod.addImport("prompts", prompts_mod);
+
+    const scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/scheduler.zig") });
+    scheduler_mod.addImport("cron", cron_mod);
+
+    // ── Command module (CLI subcommands) ────────────────────────────────
+
+    const command_mod = b.createModule(.{ .root_source_file = b.path("src/cmd.zig") });
+    command_mod.addImport("Config", config_mod);
+    command_mod.addImport("Cmd", cmd_mod);
+    command_mod.addImport("ProcessPool", pool_mod);
+    command_mod.addImport("memory", memory_mod);
+    command_mod.addImport("prompts", prompts_mod);
+    command_mod.addImport("claude", claude_mod);
 
     // ── Executable ─────────────────────────────────────────────────────
 
@@ -66,6 +85,8 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("ProcessPool", pool_mod);
     exe_mod.addImport("Cmd", cmd_mod);
     exe_mod.addImport("message", message_mod);
+    exe_mod.addImport("cmd", command_mod);
+    exe_mod.addImport("scheduler", scheduler_mod);
 
     const exe = b.addExecutable(.{
         .name = "cld",
@@ -88,7 +109,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
 
     // No-dependency tests
-    addTestTarget(b, test_step, "cmd", b.path("src/Cmd.zig"), target, optimize, &.{});
+    addTestTarget(b, test_step, "cmd", b.path("src/proc/Cmd.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "config", b.path("src/Config.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "uuid", b.path("src/Uuid.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "memory", b.path("src/memory.zig"), target, optimize, &.{});
@@ -109,12 +130,12 @@ pub fn build(b: *std.Build) void {
     }
 
     // Process -> Cmd
-    addTestTarget(b, test_step, "process", b.path("src/Process.zig"), target, optimize, &.{
+    addTestTarget(b, test_step, "process", b.path("src/proc/Process.zig"), target, optimize, &.{
         .{ .name = "Cmd", .module = cmd_mod },
     });
 
     // ProcessPool -> Cmd, Process
-    addTestTarget(b, test_step, "process_pool", b.path("src/ProcessPool.zig"), target, optimize, &.{
+    addTestTarget(b, test_step, "process_pool", b.path("src/proc/ProcessPool.zig"), target, optimize, &.{
         .{ .name = "Cmd", .module = cmd_mod },
         .{ .name = "Process", .module = process_mod },
     });
@@ -127,13 +148,20 @@ pub fn build(b: *std.Build) void {
         .{ .name = "ProcessPool", .module = pool_mod },
     });
 
-    // claude -> provider, message, Cmd, ProcessPool, Uuid
+    // scheduler -> cron
+    addTestTarget(b, test_step, "scheduler", b.path("src/scheduler.zig"), target, optimize, &.{
+        .{ .name = "cron", .module = cron_mod },
+    });
+
+    // claude -> provider, message, Cmd, ProcessPool, Uuid, memory, prompts
     addTestTarget(b, test_step, "claude", b.path("src/provider/claude.zig"), target, optimize, &.{
         .{ .name = "provider", .module = provider_mod },
         .{ .name = "message", .module = message_mod },
         .{ .name = "Cmd", .module = cmd_mod },
         .{ .name = "ProcessPool", .module = pool_mod },
         .{ .name = "Uuid", .module = uuid_mod },
+        .{ .name = "memory", .module = memory_mod },
+        .{ .name = "prompts", .module = prompts_mod },
     });
 }
 

@@ -11,14 +11,18 @@ pub const AdaptersConfig = struct {
     imessage: IMessageConfig = .{},
 };
 
+pub const TasksConfig = struct {
+    compact: ?[]const u8 = null, // cron expression override
+};
+
 /// JSON-parseable schema (no runtime-only fields).
 const Schema = struct {
     adapters: AdaptersConfig = .{},
-    memory_path: ?[]const u8 = null,
+    tasks: ?TasksConfig = null,
 };
 
 adapters: AdaptersConfig = .{},
-memory_path: ?[]const u8 = null,
+tasks: ?TasksConfig = null,
 
 /// Arena backing parsed string slices. Null when using defaults.
 arena: ?*std.heap.ArenaAllocator = null,
@@ -41,7 +45,7 @@ pub fn load(allocator: std.mem.Allocator) Config {
 
     return .{
         .adapters = parsed.value.adapters,
-        .memory_path = parsed.value.memory_path,
+        .tasks = parsed.value.tasks,
         .arena = parsed.arena,
     };
 }
@@ -78,8 +82,7 @@ test "parse full config" {
         \\    "imessage": {
         \\      "allowed_senders": ["+12125551234", "+14155559876"]
         \\    }
-        \\  },
-        \\  "memory_path": "/tmp/cld-memory"
+        \\  }
         \\}
     ;
     var parsed = try parseTestConfig(std.testing.allocator, json);
@@ -89,7 +92,6 @@ test "parse full config" {
     try std.testing.expectEqual(2, cfg.adapters.imessage.allowed_senders.len);
     try std.testing.expectEqualStrings("+12125551234", cfg.adapters.imessage.allowed_senders[0]);
     try std.testing.expectEqualStrings("+14155559876", cfg.adapters.imessage.allowed_senders[1]);
-    try std.testing.expectEqualStrings("/tmp/cld-memory", cfg.memory_path.?);
 }
 
 test "parse empty JSON uses defaults" {
@@ -98,7 +100,6 @@ test "parse empty JSON uses defaults" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(0, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expect(cfg.memory_path == null);
 }
 
 test "parse partial config — adapters only" {
@@ -116,7 +117,6 @@ test "parse partial config — adapters only" {
     const cfg = parsed.value;
 
     try std.testing.expectEqual(1, cfg.adapters.imessage.allowed_senders.len);
-    try std.testing.expect(cfg.memory_path == null);
 }
 
 test "isSenderAllowed with allowlist" {
@@ -128,7 +128,6 @@ test "isSenderAllowed with allowlist" {
 
     const config: Config = .{
         .adapters = cfg.adapters,
-        .memory_path = cfg.memory_path,
     };
 
     try std.testing.expect(config.isSenderAllowed("+1111"));
@@ -155,6 +154,5 @@ test "load missing file returns defaults" {
     defer config.deinit();
 
     try std.testing.expectEqual(0, config.adapters.imessage.allowed_senders.len);
-    try std.testing.expect(config.memory_path == null);
     try std.testing.expect(config.arena == null);
 }

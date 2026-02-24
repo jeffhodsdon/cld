@@ -147,12 +147,24 @@ pub fn kill(self: *Process) void {
 
 pub fn deinit(self: *Process) void {
     if (self.exit_status == null) {
-        posix.kill(self.child.id, posix.SIG.KILL) catch {};
-        // Non-blocking reap: try a few times, then give up (init inherits the zombie).
-        for (0..10) |_| {
+        // SIGTERM first — give the child a chance to clean up its own subprocesses.
+        posix.kill(self.child.id, posix.SIG.TERM) catch {};
+        for (0..50) |_| {
             const res = posix.waitpid(self.child.id, std.c.W.NOHANG);
-            if (res.pid != 0) break;
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            if (res.pid != 0) {
+                self.exit_status = res.status;
+                break;
+            }
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+        // Still alive after 500ms — force kill.
+        if (self.exit_status == null) {
+            posix.kill(self.child.id, posix.SIG.KILL) catch {};
+            for (0..10) |_| {
+                const res = posix.waitpid(self.child.id, std.c.W.NOHANG);
+                if (res.pid != 0) break;
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+            }
         }
     }
 

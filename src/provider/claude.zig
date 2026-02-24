@@ -7,6 +7,8 @@ const Handle = msg.Handle;
 const Cmd = @import("Cmd");
 const ProcessPool = @import("ProcessPool");
 const Uuid = @import("Uuid");
+const Memory = @import("memory");
+const prompts = @import("prompts");
 
 const Claude = @This();
 
@@ -88,6 +90,61 @@ pub fn ownsProcess(self: *Claude, process_id: ProcessPool.Id) bool {
         if (session.process_id == process_id) return true;
     }
     return false;
+}
+
+/// Compact a single day's full log into a tiny summary using Haiku.
+/// Runs synchronously (blocks until claude exits). Call before the event loop.
+pub fn compact(self: *Claude, memory: *Memory, date: []const u8) void {
+    if (memory.hasTiny(date)) return;
+
+    const full_log = memory.readFullLog(date) catch return;
+    defer self.allocator.free(full_log);
+    if (full_log.len == 0) return;
+
+    std.log.info("compacting {s} ({d} bytes)", .{ date, full_log.len });
+
+    var cmd = Cmd.init(self.allocator, "claude");
+    defer cmd.deinit();
+    cmd.arg("-p") catch return;
+    cmd.arg(full_log) catch return;
+    cmd.option("--model", "haiku") catch return;
+    cmd.option("--system-prompt", prompts.compact) catch return;
+    cmd.option("--output-format", "json") catch return;
+    cmd.arg("--dangerously-skip-permissions") catch return;
+    cmd.envRemove("CLAUDECODE") catch return;
+
+    var result = ProcessPool.exec(self.allocator, &cmd) catch |err| {
+        std.log.err("compaction failed for {s}: {}", .{ date, err });
+        return;
+    };
+    defer result.deinit();
+
+    if (result.exit_code != 0) {
+        std.log.err("compaction exited {d} for {s}: {s}", .{ result.exit_code, date, result.stderr });
+        return;
+    }
+
+    var text: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (Memory.parseClaudeResult(self.allocator, line)) |t| {
+            if (text) |old| self.allocator.free(old);
+            text = t;
+        }
+    }
+    const compact_text = text orelse {
+        std.log.warn("compaction produced no output for {s}", .{date});
+        return;
+    };
+    defer self.allocator.free(compact_text);
+
+    memory.writeTiny(date, compact_text) catch |err| {
+        std.log.err("failed to write tiny for {s}: {}", .{ date, err });
+        return;
+    };
+
+    std.log.info("compacted {s} -> {d} bytes", .{ date, compact_text.len });
 }
 
 fn buildPrompt(allocator: std.mem.Allocator, messages: []const msg.Message) ![]const u8 {
