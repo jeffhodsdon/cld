@@ -306,15 +306,99 @@ fn deinitFn(ptr: *anyopaque) void {
     self.deinit();
 }
 
+const ServerToolUse = struct {
+    web_search_requests: ?u64 = null,
+    web_fetch_requests: ?u64 = null,
+};
+
+const Usage = struct {
+    input_tokens: ?u64 = null,
+    output_tokens: ?u64 = null,
+    cache_read_input_tokens: ?u64 = null,
+    cache_creation_input_tokens: ?u64 = null,
+    server_tool_use: ?ServerToolUse = null,
+};
+
+const ModelUsageEntry = struct {
+    inputTokens: ?u64 = null,
+    outputTokens: ?u64 = null,
+    cacheReadInputTokens: ?u64 = null,
+    contextWindow: ?u64 = null,
+    maxOutputTokens: ?u64 = null,
+};
+
+const ClaudeJson = struct {
+    result: ?[]const u8 = null,
+    is_error: bool = false,
+    session_id: ?[]const u8 = null,
+    duration_ms: ?u64 = null,
+    duration_api_ms: ?u64 = null,
+    num_turns: ?u64 = null,
+    total_cost_usd: ?f64 = null,
+    usage: ?Usage = null,
+    modelUsage: ?std.json.Value = null,
+};
+
 fn parseClaudeResponse(allocator: std.mem.Allocator, line: []const u8) ?[]const u8 {
-    const parsed = std.json.parseFromSlice(struct {
-        result: ?[]const u8 = null,
-        is_error: bool = false,
-    }, allocator, line, .{ .ignore_unknown_fields = true }) catch return null;
+    const parsed = std.json.parseFromSlice(ClaudeJson, allocator, line, .{ .ignore_unknown_fields = true }) catch return null;
     defer parsed.deinit();
 
-    if (parsed.value.is_error) return null;
-    const result = parsed.value.result orelse return null;
+    const v = parsed.value;
+
+    if (v.is_error) return null;
+
+    // Log metadata
+    if (v.total_cost_usd) |_| {
+        const usage = v.usage orelse Usage{};
+        const in = usage.input_tokens orelse 0;
+        const out = usage.output_tokens orelse 0;
+        const cache_read = usage.cache_read_input_tokens orelse 0;
+        const cache_create = usage.cache_creation_input_tokens orelse 0;
+        const total_tokens = in + out + cache_read + cache_create;
+
+        // Extract context window and model name from modelUsage (first entry)
+        var context_window: u64 = 0;
+        var model_name: []const u8 = "unknown";
+        if (v.modelUsage) |mu| {
+            if (mu == .object) {
+                var it = mu.object.iterator();
+                if (it.next()) |entry| {
+                    model_name = entry.key_ptr.*;
+                    const model_parsed = std.json.parseFromValue(ModelUsageEntry, allocator, entry.value_ptr.*, .{ .ignore_unknown_fields = true }) catch null;
+                    if (model_parsed) |mp| {
+                        context_window = mp.value.contextWindow orelse 0;
+                    }
+                }
+            }
+        }
+
+        const web_searches = if (usage.server_tool_use) |stu| stu.web_search_requests orelse 0 else 0;
+
+        if (context_window > 0) {
+            const total_k = total_tokens / 1000;
+            const ctx_k = context_window / 1000;
+            const pct = (total_tokens * 100) / context_window;
+            std.log.info("claude: {s} | {d}ms | turns={d} | ctx={d}k/{d}k ({d}%) | web_searches={d}", .{
+                model_name,
+                v.duration_ms orelse 0,
+                v.num_turns orelse 0,
+                total_k,
+                ctx_k,
+                pct,
+                web_searches,
+            });
+        } else {
+            std.log.info("claude: {s} | {d}ms | turns={d} | tokens={d} | web_searches={d}", .{
+                model_name,
+                v.duration_ms orelse 0,
+                v.num_turns orelse 0,
+                total_tokens,
+                web_searches,
+            });
+        }
+    }
+
+    const result = v.result orelse return null;
     const trimmed = std.mem.trim(u8, result, &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
 
