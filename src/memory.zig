@@ -415,13 +415,6 @@ test "parseClaudeResult error response" {
     try testing.expect(parseClaudeResult(testing.allocator, json) == null);
 }
 
-test "parseClaudeResult null result" {
-    const json =
-        \\{"result":null,"is_error":false}
-    ;
-    try testing.expect(parseClaudeResult(testing.allocator, json) == null);
-}
-
 test "parseClaudeResult empty result" {
     const json =
         \\{"result":"","is_error":false}

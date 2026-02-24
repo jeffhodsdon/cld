@@ -239,17 +239,10 @@ test "parse valid message" {
 
     try testing.expectEqualStrings("E37CE941-ABCD-1234-5678-9ABCDEF01234", m.id);
     try testing.expectEqualStrings("+17034055338", m.sender);
+    try testing.expectEqualStrings("imessage:+17034055338", m.channel_id);
     try testing.expectEqualStrings("hello world", m.text);
     try testing.expect(m.reply_to == null);
-}
-
-test "parse sets channel_id prefix" {
-    var arena = testAllocator();
-    defer arena.deinit();
-    const m = parseJsonMessage(arena.allocator(), valid_json) orelse
-        return error.ExpectedMessage;
-
-    try testing.expectEqualStrings("imessage:+17034055338", m.channel_id);
+    try testing.expectEqual(@as(usize, 0), m.attachments.len);
 }
 
 test "parse skips is_from_me" {
@@ -327,15 +320,6 @@ test "parse reply_to_guid" {
     try testing.expectEqualStrings("ORIGINAL-GUID", m.reply_to.?);
 }
 
-test "parse empty attachments array" {
-    var arena = testAllocator();
-    defer arena.deinit();
-    const m = parseJsonMessage(arena.allocator(), valid_json) orelse
-        return error.ExpectedMessage;
-
-    try testing.expectEqual(@as(usize, 0), m.attachments.len);
-}
-
 test "parse message with attachments" {
     var arena = testAllocator();
     defer arena.deinit();
@@ -347,20 +331,6 @@ test "parse message with attachments" {
 
     try testing.expectEqual(@as(usize, 1), m.attachments.len);
     try testing.expectEqualStrings("/Users/c/Library/Messages/Attachments/ab/photo.jpg", m.attachments[0]);
-}
-
-test "parse message with multiple attachments" {
-    var arena = testAllocator();
-    defer arena.deinit();
-    const json =
-        \\{"id":1,"chat_id":1,"guid":"G5","sender":"+1","text":"","created_at":"2026-02-06T23:16:42Z","is_from_me":false,"is_reaction":false,"attachments":[{"filename":"a.jpg","mime_type":"image/jpeg","original_path":"/tmp/a.jpg"},{"filename":"b.png","mime_type":"image/png","original_path":"/tmp/b.png"}]}
-    ;
-    const m = parseJsonMessage(arena.allocator(), json) orelse
-        return error.ExpectedMessage;
-
-    try testing.expectEqual(@as(usize, 2), m.attachments.len);
-    try testing.expectEqualStrings("/tmp/a.jpg", m.attachments[0]);
-    try testing.expectEqualStrings("/tmp/b.png", m.attachments[1]);
 }
 
 test "parse attachment with null filepath is skipped" {

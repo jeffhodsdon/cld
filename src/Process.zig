@@ -30,9 +30,6 @@ pub fn spawn(allocator: std.mem.Allocator, cmd: *Cmd, opts: SpawnOptions) !Proce
         .pipe => .Pipe,
         .ignore => .Ignore,
     };
-    // Put child in its own process group so terminal SIGINT
-    // only goes to cld, not to child processes.
-    child.pgid = 0;
     if (cmd.cwd) |cwd| {
         child.cwd = cwd;
     }
@@ -150,10 +147,18 @@ pub fn kill(self: *Process) void {
 
 pub fn deinit(self: *Process) void {
     if (self.exit_status == null) {
-        // SIGKILL for immediate exit — process is being destroyed
         posix.kill(self.child.id, posix.SIG.KILL) catch {};
-        _ = self.child.wait() catch {};
+        // Non-blocking reap: try a few times, then give up (init inherits the zombie).
+        for (0..10) |_| {
+            const res = posix.waitpid(self.child.id, std.c.W.NOHANG);
+            if (res.pid != 0) break;
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+        }
     }
+
+    // Close pipe fds directly — avoid child.wait() which can block.
+    if (self.child.stdout) |stdout| posix.close(stdout.handle);
+    if (self.child.stderr) |stderr| posix.close(stderr.handle);
 
     self.stdout_buf.deinit(self.allocator);
     self.stderr_buf.deinit(self.allocator);

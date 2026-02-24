@@ -116,20 +116,10 @@ pub fn main() !void {
     var memory = Memory.init(allocator, memory_path);
     defer memory.deinit();
 
-    // Resolve sessions path: ~/.local/share/cld/sessions.json
-    const sessions_path = resolveSessions: {
-        const home = std.posix.getenv("HOME") orelse break :resolveSessions null;
-        const dir = std.fs.path.join(allocator, &.{ home, ".local", "share", "cld" }) catch break :resolveSessions null;
-        defer allocator.free(dir);
-        std.fs.cwd().makePath(dir) catch {};
-        break :resolveSessions std.fs.path.join(allocator, &.{ home, ".local", "share", "cld", "sessions.json" }) catch null;
-    };
-    defer if (sessions_path) |p| allocator.free(p);
-
     var imsg = try IMessage.init(allocator, &pool);
     defer imsg.deinit();
 
-    var claude = Claude.init(allocator, &pool, sessions_path);
+    var claude = Claude.init(allocator, &pool);
     defer claude.deinit();
 
     // Event-driven main loop
@@ -210,6 +200,7 @@ pub fn main() !void {
                         }
                         if (handle_found) |handle| {
                             if (claude.provider().poll(handle)) |response| {
+                                defer if (response.text.len > 0) allocator.free(response.text);
                                 if (response.done and response.text.len > 0) {
                                     std.log.info("send [{s}] {s}", .{ conv_id, response.text });
                                     memory.logMessage("send", conv_id, response.text);
@@ -301,7 +292,6 @@ fn checkClaudeAuth(w: anytype) void {
     cmd.arg("auth") catch return;
     cmd.arg("status") catch return;
     cmd.arg("--json") catch return;
-    cmd.envRemove("CLAUDECODE") catch return;
 
     var result = ProcessPool.exec(allocator, &cmd) catch {
         printFail(w, label, "failed to run claude", "Check claude binary");
