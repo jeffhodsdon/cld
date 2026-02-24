@@ -83,3 +83,20 @@ YYYY-MM-DD.full.md    # full conversation log
 ```
 
 All optional. Changes picked up automatically via stat checks.
+
+## Project Status
+
+Early development. Core loop works — messages come in, get routed to Claude, responses go back out, memory accumulates. Running it daily as a personal assistant over iMessage.
+
+What's solid:
+- Event-driven process pool with poll-based I/O
+- iMessage adapter (watch + send)
+- Claude provider with session reuse and queuing
+- File-based memory with stat-checked hot reload
+
+What's next:
+- More adapters (Signal, Telegram, etc.)
+- More providers (local models, OpenAI, etc.)
+- Memory compaction (daily tiny.md generation)
+- Skills (checked-in, reviewed prompts the assistant can invoke)
+- Tool use and agent capabilities
