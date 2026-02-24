@@ -188,9 +188,60 @@ pub fn logMessage(self: *Memory, direction: []const u8, id: []const u8, text: []
     self.appendToday(entry) catch {};
 }
 
+/// Read a day's full chat log. Caller owns returned slice.
+pub fn readFullLog(self: *Memory, date: []const u8) ![]const u8 {
+    const filename = try std.fmt.allocPrint(self.allocator, "{s}.full.md", .{date});
+    defer self.allocator.free(filename);
+    return readFileAlloc(self.allocator, self.root_path, filename);
+}
+
+/// Write a compacted daily summary. Overwrites any existing tiny for that date.
+pub fn writeTiny(self: *Memory, date: []const u8, content: []const u8) !void {
+    const filename = try std.fmt.allocPrint(self.allocator, "{s}.tiny.md", .{date});
+    defer self.allocator.free(filename);
+
+    const path = try std.fs.path.join(self.allocator, &.{ self.root_path, filename });
+    defer self.allocator.free(path);
+
+    const file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+    try file.writeAll(content);
+}
+
+/// Check whether a tiny summary exists for a given date.
+pub fn hasTiny(self: *Memory, date: []const u8) bool {
+    const filename = std.fmt.allocPrint(self.allocator, "{s}.tiny.md", .{date}) catch return false;
+    defer self.allocator.free(filename);
+
+    const path = std.fs.path.join(self.allocator, &.{ self.root_path, filename }) catch return false;
+    defer self.allocator.free(path);
+
+    const file = std.fs.cwd().openFile(path, .{}) catch return false;
+    file.close();
+    return true;
+}
+
+/// Reload tinys from disk (call after writing new ones post-init).
+pub fn reloadTinys(self: *Memory) void {
+    // Free existing entries
+    var it = self.tinys.iterator();
+    while (it.next()) |entry| {
+        self.allocator.free(entry.key_ptr.*);
+        self.allocator.free(entry.value_ptr.*);
+    }
+    self.tinys.clearRetainingCapacity();
+    self.loadRecentTinys(7) catch {};
+}
+
 /// Format current date as YYYY-MM-DD.
 pub fn todayStr() [10]u8 {
     return epochToDateStr(@intCast(std.time.timestamp()));
+}
+
+/// Format yesterday's date as YYYY-MM-DD.
+pub fn yesterdayStr() [10]u8 {
+    const now: u64 = @intCast(std.time.timestamp());
+    return epochToDateStr(now - 86400);
 }
 
 fn epochToDateStr(timestamp: u64) [10]u8 {

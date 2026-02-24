@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/Config.zig") });
     const prompts_mod = b.createModule(.{ .root_source_file = b.path("src/prompts.zig") });
     prompts_mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
-    prompts_mod.addAnonymousImport("summarize_prompt", .{ .root_source_file = b.path("prompts/summarize.md") });
+    prompts_mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
 
     // ── Library modules (with dependencies) ────────────────────────────
 
@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
-        mod.addAnonymousImport("summarize_prompt", .{ .root_source_file = b.path("prompts/summarize.md") });
+        mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
         const unit_test = b.addTest(.{ .root_module = mod });
         const run = b.addRunArtifact(unit_test);
         test_step.dependOn(&run.step);

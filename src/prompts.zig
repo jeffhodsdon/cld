@@ -2,7 +2,7 @@ const std = @import("std");
 const epoch = std.time.epoch;
 
 pub const system = @embedFile("system_prompt");
-pub const summarize = @embedFile("summarize_prompt");
+pub const compact = @embedFile("compact_prompt");
 
 /// Build the full system prompt: immutable base + date + mutable memory context.
 pub fn buildSystemPrompt(allocator: std.mem.Allocator, memory_context: []const u8) ![]const u8 {

@@ -116,6 +116,11 @@ pub fn main() !void {
     var memory = Memory.init(allocator, memory_path);
     defer memory.deinit();
 
+    // Startup compaction: summarize recent days that have full logs but no tiny
+    compactDay(allocator, &memory, &Memory.yesterdayStr());
+    compactDay(allocator, &memory, &Memory.todayStr());
+    memory.reloadTinys();
+
     var imsg = try IMessage.init(allocator, &pool);
     defer imsg.deinit();
 
@@ -228,6 +233,65 @@ pub fn main() !void {
             }
         }
     }
+}
+
+/// Compact a single day's full log into a tiny summary using Haiku.
+fn compactDay(allocator: std.mem.Allocator, memory: *Memory, date: []const u8) void {
+    // Skip if tiny already exists
+    if (memory.hasTiny(date)) return;
+
+    // Read the full log for this date
+    const full_log = memory.readFullLog(date) catch return;
+    defer allocator.free(full_log);
+    if (full_log.len == 0) return;
+
+    std.log.info("compacting {s} ({d} bytes)", .{ date, full_log.len });
+
+    // Build claude command: haiku model, compact prompt as system prompt
+    var cmd = Cmd.init(allocator, "claude");
+    defer cmd.deinit();
+    cmd.arg("-p") catch return;
+    cmd.arg(full_log) catch return;
+    cmd.option("--model", "haiku") catch return;
+    cmd.option("--system-prompt", prompts.compact) catch return;
+    cmd.option("--output-format", "json") catch return;
+    cmd.arg("--dangerously-skip-permissions") catch return;
+    cmd.envRemove("CLAUDECODE") catch return;
+
+    var result = ProcessPool.exec(allocator, &cmd) catch |err| {
+        std.log.err("compaction failed for {s}: {}", .{ date, err });
+        return;
+    };
+    defer result.deinit();
+
+    if (result.exit_code != 0) {
+        std.log.err("compaction exited {d} for {s}: {s}", .{ result.exit_code, date, result.stderr });
+        return;
+    }
+
+    // Parse JSON result — stdout may contain multiple lines, find the result
+    var text: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (Memory.parseClaudeResult(allocator, line)) |t| {
+            if (text) |old| allocator.free(old);
+            text = t;
+        }
+    }
+    const compact_text = text orelse {
+        std.log.warn("compaction produced no output for {s}", .{date});
+        return;
+    };
+    defer allocator.free(compact_text);
+
+    // Write the tiny file
+    memory.writeTiny(date, compact_text) catch |err| {
+        std.log.err("failed to write tiny for {s}: {}", .{ date, err });
+        return;
+    };
+
+    std.log.info("compacted {s} -> {d} bytes", .{ date, compact_text.len });
 }
 
 fn runStatus() void {
