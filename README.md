@@ -2,7 +2,7 @@
 
 Command Line Daemon. A fast, persistent assistant.
 
-You don't need a Node.js app with a dependency graph deeper than the Mariana Trench to connect your messaging app to a coding agent. Just processes, persistent memory, pipes, and poll. Written in Zig.
+You don't need a TypeScript app with a dependency graph deeper than the Mariana Trench to connect your messaging app to a coding agent. Just processes, persistent memory, pipes, and poll. Written in Zig.
 
 > *Reduce the amount one must remember.* — Zig Zen
 
