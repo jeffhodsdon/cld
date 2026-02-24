@@ -3,6 +3,7 @@ const epoch = std.time.epoch;
 
 pub const system = @embedFile("system_prompt");
 pub const compact = @embedFile("compact_prompt");
+pub const memory = @embedFile("memory_prompt");
 
 /// Build the full system prompt: immutable base + date + mutable memory context.
 pub fn buildSystemPrompt(allocator: std.mem.Allocator, memory_context: []const u8) ![]const u8 {
@@ -19,8 +20,10 @@ pub fn buildSystemPrompt(allocator: std.mem.Allocator, memory_context: []const u
     try buf.appendSlice(allocator, &date);
     try buf.appendSlice(allocator, ".");
 
-    // 3. Mutable memory context
+    // 3. Memory system preamble + mutable memory context
     if (memory_context.len > 0) {
+        try buf.appendSlice(allocator, "\n\n");
+        try buf.appendSlice(allocator, memory);
         try buf.appendSlice(allocator, "\n\n");
         try buf.appendSlice(allocator, memory_context);
     }

@@ -1,22 +1,39 @@
 Compact the following conversation log into dense context for a future AI session. You are extracting what matters so a fresh session can pick up where this one left off.
 
-Output format — use only sections that apply, skip empty ones:
+The log is line-numbered. Format: "recv [sender]" = user received message, "send [recipient]" = assistant sent message.
+
+Include line references [L42-58] on each bullet so a future session can look up full context.
+
+YOUR ONLY INPUT IS THE NUMBERED LOG BELOW. You have no other context. Do not reference any external files, system prompts, documentation, or prior knowledge about the user. Every fact in your output must trace to a specific line number in the log. If you cannot cite a line number, do not include it.
+
+Output EXACTLY these sections (no others). Always include Participants. Skip a section only if truly empty.
+
+## Participants
+Unique identifiers from recv/send lines only (phone numbers, emails). Not people merely discussed.
 
 ## Open threads
-Things actively being worked on or discussed that aren't resolved yet. Include enough detail to resume.
+Unresolved topics with enough detail to resume. Technical: include function names, patterns, techniques discussed.
 
 ## Decisions made
-Choices, preferences, or conclusions reached. State what was decided, not the deliberation.
+Choices, preferences, or strategic conclusions — not bug fixes (those go in Completed). What was decided and why (1 line each).
 
-## Action items
-Concrete next steps — who needs to do what. Distinguish between user tasks and assistant tasks.
+## Pending actions
+Future tasks with dates/specifics. Don't repeat Completed items.
+
+## Completed
+Actions done (emails sent, reminders set, bugs fixed, files/docs created). Include file paths for any documents saved.
+
+## People & context
+People mentioned (not participants) — name, role, relationship.
 
 ## Learned
-New facts about the user, their preferences, corrections, or context that should persist. Things that would go in MEMORY.md or USER.md.
+Persistent user facts from this conversation only — projects, preferences, living situation, work style.
 
 Rules:
-- Be terse. This gets injected into a system prompt — every token costs context.
-- Use bullet points, not prose.
-- Drop greetings, filler, pleasantries, debugging dead ends that resolved.
-- Preserve specifics: names, numbers, file paths, decisions. Don't generalize.
-- If nothing meaningful happened (just small talk), output "No significant context."
+- MAX 35 lines total output. Be ruthlessly terse.
+- 1-2 lines per bullet max.
+- Every bullet must have a line reference [Lstart-end].
+- Technical: include function/method names, not vague descriptions.
+- Do not attribute assistant's knowledge to the user.
+- Do not create sections not listed above.
+- If nothing meaningful happened, output "No significant context."

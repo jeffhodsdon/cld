@@ -139,7 +139,7 @@ pub fn main() !void {
     defer scheduler.deinit();
 
     // Register built-in tasks (config can override cron expression)
-    const default_compact = Scheduler.parseCron("0 3 * * *") catch unreachable;
+    const default_compact = Scheduler.parseCron("1 0 * * *") catch unreachable;
     const compact_schedule: Scheduler.Schedule = if (config.tasks) |t|
         if (t.compact) |expr| Scheduler.parseCron(expr) catch default_compact else default_compact
     else
@@ -157,7 +157,6 @@ pub fn main() !void {
             if (std.mem.eql(u8, task_name, "compact")) {
                 std.log.info("scheduler: running compaction", .{});
                 claude.compact(&memory, &Memory.yesterdayStr());
-                claude.compact(&memory, &Memory.todayStr());
                 memory.reloadTinys();
                 scheduler.save() catch {};
             }

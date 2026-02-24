@@ -95,18 +95,20 @@ pub fn ownsProcess(self: *Claude, process_id: ProcessPool.Id) bool {
 /// Compact a single day's full log into a tiny summary using Haiku.
 /// Runs synchronously (blocks until claude exits). Call before the event loop.
 pub fn compact(self: *Claude, memory: *Memory, date: []const u8) void {
-    if (memory.hasTiny(date)) return;
-
     const full_log = memory.readFullLog(date) catch return;
     defer self.allocator.free(full_log);
     if (full_log.len == 0) return;
 
-    std.log.info("compacting {s} ({d} bytes)", .{ date, full_log.len });
+    // Prepend line numbers so the model can reference them accurately.
+    const numbered = addLineNumbers(self.allocator, full_log) catch return;
+    defer self.allocator.free(numbered);
+
+    std.log.info("compacting {s} ({d} bytes)", .{ date, numbered.len });
 
     var cmd = Cmd.init(self.allocator, "claude");
     defer cmd.deinit();
     cmd.arg("-p") catch return;
-    cmd.arg(full_log) catch return;
+    cmd.arg(numbered) catch return;
     cmd.option("--model", "haiku") catch return;
     cmd.option("--system-prompt", prompts.compact) catch return;
     cmd.option("--output-format", "json") catch return;
@@ -462,6 +464,25 @@ fn parseClaudeResponse(allocator: std.mem.Allocator, line: []const u8) ?[]const 
     return allocator.dupe(u8, trimmed) catch null;
 }
 
+/// Prepend "  1| ", "  2| ", ... to each line of input.
+fn addLineNumbers(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var line_num: u32 = 1;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        // Skip empty trailing element from splitScalar on trailing newline
+        if (line.len == 0 and lines.peek() == null) break;
+        var buf: [12]u8 = undefined;
+        const prefix = std.fmt.bufPrint(&buf, "{d:>4}| ", .{line_num}) catch "   | ";
+        try out.appendSlice(allocator, prefix);
+        try out.appendSlice(allocator, line);
+        try out.append(allocator, '\n');
+        line_num += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -721,5 +742,26 @@ test "different conversations not blocked by each other" {
     // conv-1 message still queued
     try testing.expectEqual(@as(usize, 1), claude.queue.items.len);
     try testing.expectEqualStrings("conv-1", claude.queue.items[0].conversation_id);
+}
+
+test "addLineNumbers basic" {
+    const input = "hello\nworld\n";
+    const result = try addLineNumbers(testing.allocator, input);
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("   1| hello\n   2| world\n", result);
+}
+
+test "addLineNumbers single line no trailing newline" {
+    const input = "hello";
+    const result = try addLineNumbers(testing.allocator, input);
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("   1| hello\n", result);
+}
+
+test "addLineNumbers empty input" {
+    const input = "";
+    const result = try addLineNumbers(testing.allocator, input);
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("", result);
 }
 

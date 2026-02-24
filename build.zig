@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     const prompts_mod = b.createModule(.{ .root_source_file = b.path("src/prompts.zig") });
     prompts_mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
     prompts_mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
+    prompts_mod.addAnonymousImport("memory_prompt", .{ .root_source_file = b.path("prompts/memory.md") });
 
     // ── External dependencies ───────────────────────────────────────────
 
@@ -123,6 +124,7 @@ pub fn build(b: *std.Build) void {
         });
         mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
         mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
+        mod.addAnonymousImport("memory_prompt", .{ .root_source_file = b.path("prompts/memory.md") });
         const unit_test = b.addTest(.{ .root_module = mod });
         const run = b.addRunArtifact(unit_test);
         test_step.dependOn(&run.step);
