@@ -1,3 +1,5 @@
+<img src="icon.png" width="80" align="left" />
+
 # cld
 
 Command Line Daemon. A fast, persistent assistant.
