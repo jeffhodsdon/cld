@@ -1,9 +1,9 @@
 <img src="icon.png" width="62" align="left" />
 <h1 style="border: none;">cld</h1>
 
-Command line daemon. A fast, persistent assistant.
+Command line daemon. A fast, persistent assistant for the mindful.
 
-You don't need a TypeScript app with a dependency graph deeper than the Mariana Trench to connect your messaging app to a coding agent. Just processes, persistent memory, pipes, and poll. Written in Zig.
+You don't need much to connect your messaging app to a coding agent. Just processes, persistent memory, pipes, and poll. Written in Zig.
 
 > *Reduce the amount one must remember.* — Zig Zen
 
