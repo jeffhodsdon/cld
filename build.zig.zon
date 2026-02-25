@@ -1,12 +1,7 @@
 .{
     .name = .cld,
     .version = "0.15.2",
-    .dependencies = .{
-        .cron = .{
-            .url = "git+https://github.com/dying-will-bullet/cron?ref=master#cffdf6e93b045f0b1df7152f2894fa4e5fa6584f",
-            .hash = "cron-0.3.0-joDqxM3nAAC6GdPc2iPAzxRIvJXKHRLfXodnIfNcq0ah",
-        },
-    },
+    .dependencies = .{},
     .paths = .{""},
     .fingerprint = 0x36472d81e209914b,
 }

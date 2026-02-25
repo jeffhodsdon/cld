@@ -1,7 +1,7 @@
 const std = @import("std");
 const Cmd = @import("Cmd");
 const ProcessPool = @import("ProcessPool");
-const Memory = @import("memory");
+const Memory = @import("Memory");
 const Claude = @import("claude");
 const prompts = @import("prompts");
 

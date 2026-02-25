@@ -8,17 +8,13 @@ pub fn build(b: *std.Build) void {
 
     const message_mod = b.createModule(.{ .root_source_file = b.path("src/message.zig") });
     const cmd_mod = b.createModule(.{ .root_source_file = b.path("src/proc/Cmd.zig") });
-    const memory_mod = b.createModule(.{ .root_source_file = b.path("src/memory.zig") });
+    const memory_mod = b.createModule(.{ .root_source_file = b.path("src/Memory.zig") });
     const uuid_mod = b.createModule(.{ .root_source_file = b.path("src/Uuid.zig") });
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/Config.zig") });
     const prompts_mod = b.createModule(.{ .root_source_file = b.path("src/prompts.zig") });
     prompts_mod.addAnonymousImport("system_prompt", .{ .root_source_file = b.path("prompts/system.md") });
     prompts_mod.addAnonymousImport("compact_prompt", .{ .root_source_file = b.path("prompts/compact.md") });
     prompts_mod.addAnonymousImport("memory_prompt", .{ .root_source_file = b.path("prompts/memory.md") });
-
-    // ── External dependencies ───────────────────────────────────────────
-
-    const cron_mod = b.dependency("cron", .{}).module("cron");
 
     // ── Library modules (with dependencies) ────────────────────────────
 
@@ -32,7 +28,7 @@ pub fn build(b: *std.Build) void {
     const adapter_mod = b.createModule(.{ .root_source_file = b.path("src/adapter.zig") });
     adapter_mod.addImport("message", message_mod);
 
-    const imessage_mod = b.createModule(.{ .root_source_file = b.path("src/adapter/imessage.zig") });
+    const imessage_mod = b.createModule(.{ .root_source_file = b.path("src/adapter/IMessage.zig") });
     imessage_mod.addImport("adapter", adapter_mod);
     imessage_mod.addImport("message", message_mod);
     imessage_mod.addImport("Cmd", cmd_mod);
@@ -47,11 +43,13 @@ pub fn build(b: *std.Build) void {
     claude_mod.addImport("Cmd", cmd_mod);
     claude_mod.addImport("ProcessPool", pool_mod);
     claude_mod.addImport("Uuid", uuid_mod);
-    claude_mod.addImport("memory", memory_mod);
+    claude_mod.addImport("Memory", memory_mod);
     claude_mod.addImport("prompts", prompts_mod);
 
-    const scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/scheduler.zig") });
-    scheduler_mod.addImport("cron", cron_mod);
+    const scheduler_mod = b.createModule(.{
+        .root_source_file = b.path("src/Scheduler.zig"),
+        .link_libc = true,
+    });
 
     // ── Command module (CLI subcommands) ────────────────────────────────
 
@@ -59,7 +57,7 @@ pub fn build(b: *std.Build) void {
     command_mod.addImport("Config", config_mod);
     command_mod.addImport("Cmd", cmd_mod);
     command_mod.addImport("ProcessPool", pool_mod);
-    command_mod.addImport("memory", memory_mod);
+    command_mod.addImport("Memory", memory_mod);
     command_mod.addImport("prompts", prompts_mod);
     command_mod.addImport("claude", claude_mod);
 
@@ -79,15 +77,15 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addOptions("build_options", build_options);
     exe_mod.addImport("Config", config_mod);
-    exe_mod.addImport("imessage", imessage_mod);
+    exe_mod.addImport("IMessage", imessage_mod);
     exe_mod.addImport("claude", claude_mod);
-    exe_mod.addImport("memory", memory_mod);
+    exe_mod.addImport("Memory", memory_mod);
     exe_mod.addImport("prompts", prompts_mod);
     exe_mod.addImport("ProcessPool", pool_mod);
     exe_mod.addImport("Cmd", cmd_mod);
     exe_mod.addImport("message", message_mod);
     exe_mod.addImport("cmd", command_mod);
-    exe_mod.addImport("scheduler", scheduler_mod);
+    exe_mod.addImport("Scheduler", scheduler_mod);
 
     const exe = b.addExecutable(.{
         .name = "cld",
@@ -113,7 +111,7 @@ pub fn build(b: *std.Build) void {
     addTestTarget(b, test_step, "cmd", b.path("src/proc/Cmd.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "config", b.path("src/Config.zig"), target, optimize, &.{});
     addTestTarget(b, test_step, "uuid", b.path("src/Uuid.zig"), target, optimize, &.{});
-    addTestTarget(b, test_step, "memory", b.path("src/memory.zig"), target, optimize, &.{});
+    addTestTarget(b, test_step, "memory", b.path("src/Memory.zig"), target, optimize, &.{});
 
     // prompts -> embedded files
     {
@@ -143,17 +141,15 @@ pub fn build(b: *std.Build) void {
     });
 
     // imessage -> adapter, message, Cmd, ProcessPool
-    addTestTarget(b, test_step, "imessage", b.path("src/adapter/imessage.zig"), target, optimize, &.{
+    addTestTarget(b, test_step, "imessage", b.path("src/adapter/IMessage.zig"), target, optimize, &.{
         .{ .name = "adapter", .module = adapter_mod },
         .{ .name = "message", .module = message_mod },
         .{ .name = "Cmd", .module = cmd_mod },
         .{ .name = "ProcessPool", .module = pool_mod },
     });
 
-    // scheduler -> cron
-    addTestTarget(b, test_step, "scheduler", b.path("src/scheduler.zig"), target, optimize, &.{
-        .{ .name = "cron", .module = cron_mod },
-    });
+    // scheduler (built-in cron, needs libc for localtime_r)
+    addTestTarget(b, test_step, "scheduler", b.path("src/Scheduler.zig"), target, optimize, &.{});
 
     // claude -> provider, message, Cmd, ProcessPool, Uuid, memory, prompts
     addTestTarget(b, test_step, "claude", b.path("src/provider/claude.zig"), target, optimize, &.{
@@ -162,7 +158,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "Cmd", .module = cmd_mod },
         .{ .name = "ProcessPool", .module = pool_mod },
         .{ .name = "Uuid", .module = uuid_mod },
-        .{ .name = "memory", .module = memory_mod },
+        .{ .name = "Memory", .module = memory_mod },
         .{ .name = "prompts", .module = prompts_mod },
     });
 }

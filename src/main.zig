@@ -1,14 +1,14 @@
 const std = @import("std");
 const posix = std.posix;
 const Config = @import("Config");
-const IMessage = @import("imessage");
+const IMessage = @import("IMessage");
 const Claude = @import("claude");
-const Memory = @import("memory");
+const Memory = @import("Memory");
 const prompts = @import("prompts");
 const ProcessPool = @import("ProcessPool");
 const Cmd = @import("Cmd");
 const Handle = @import("message").Handle;
-const Scheduler = @import("scheduler");
+const Scheduler = @import("Scheduler");
 const build_options = @import("build_options");
 const cmd = @import("cmd");
 
@@ -42,7 +42,7 @@ fn customLog(
     const s = day_secs.getSecondsIntoMinute();
 
     const stderr = std.fs.File.stderr().deprecatedWriter();
-    nosuspend stderr.print("{d:0>2}:{d:0>2}:{d:0>2} {s} [{s}-{s}] " ++ format ++ "\n", .{h, m, s, prefix, version, git_hash} ++ args) catch {};
+    nosuspend stderr.print("{d:0>2}:{d:0>2}:{d:0>2} {s} [{s}-{s}] " ++ format ++ "\n", .{ h, m, s, prefix, version, git_hash } ++ args) catch {};
 }
 
 var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
@@ -79,13 +79,15 @@ pub fn main() !void {
 
     // Handle SIGINT/SIGTERM for clean shutdown
     const sa = posix.Sigaction{
-        .handler = .{ .handler = struct {
-            fn handler(_: c_int) callconv(.c) void {
-                running.store(false, .release);
-                // Wake up poll() via self-pipe
-                _ = posix.write(signal_pipe[1], "x") catch {};
-            }
-        }.handler },
+        .handler = .{
+            .handler = struct {
+                fn handler(_: c_int) callconv(.c) void {
+                    running.store(false, .release);
+                    // Wake up poll() via self-pipe
+                    _ = posix.write(signal_pipe[1], "x") catch {};
+                }
+            }.handler,
+        },
         .mask = posix.sigemptyset(),
         .flags = 0,
     };

@@ -7,7 +7,7 @@ const Handle = msg.Handle;
 const Cmd = @import("Cmd");
 const ProcessPool = @import("ProcessPool");
 const Uuid = @import("Uuid");
-const Memory = @import("memory");
+const Memory = @import("Memory");
 const prompts = @import("prompts");
 
 const Claude = @This();
@@ -764,4 +764,3 @@ test "addLineNumbers empty input" {
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("", result);
 }
-
