@@ -341,6 +341,13 @@ fn pollFn(ptr: *anyopaque, handle: Handle) ?Response {
             }
         }
 
+        // Log raw stdout on failure for debugging (error details are often here)
+        if (exit_code != 0) {
+            for (lines) |line| {
+                if (line.len > 0) std.log.err("claude stdout: {s}", .{line});
+            }
+        }
+
         return .{ .text = "", .done = true };
     }
 
