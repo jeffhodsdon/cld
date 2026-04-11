@@ -12,7 +12,7 @@ Single static binary. ~500KB.
 ## Install
 
 ```
-brew tap jeffhodsdon/tap
+brew tap vincehodsdon/tap
 brew install cld
 brew services start cld
 ```
